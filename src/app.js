@@ -3,6 +3,7 @@ import { DocumentHistory } from "./core/history.js";
 import { clipParametricLineToRect } from "./core/geometry.js";
 import { fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "./core/view.js";
 import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "./core/selection.js";
+import { createTikzExport } from "./core/latex.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SETTINGS_KEY = "sketchpad-next.settings.v1";
@@ -105,7 +106,7 @@ const toolDescriptions = {
 
 const elements = Object.fromEntries([
   "geometryCanvas", "traceLayer", "objectLayer", "previewLayer", "emptyState", "toast", "infoPanel",
-  "documentTitle", "saveState", "newButton", "openButton", "saveButton", "saveAsButton", "insertImageButton", "showHiddenButton", "fileInput", "imageInput",
+  "documentTitle", "saveState", "newButton", "openButton", "saveButton", "saveAsButton", "copyLatexButton", "insertImageButton", "showHiddenButton", "fileInput", "imageInput",
   "pageSelect", "addPageButton", "renamePageButton", "deletePageButton",
   "undoButton", "redoButton", "constructionMenu", "measurementMenu", "transformMenu", "dataMenu", "displayMenu", "deleteButton", "resetViewButton", "snapToggle", "toolHint",
   "statusTool", "statusSelection", "statusCoordinates", "statusCount",
@@ -188,7 +189,7 @@ function askUser(message, defaultValue = "", options = {}) {
   elements.inputDialogMessage.textContent = message;
   elements.inputDialogValue.value = String(defaultValue ?? "");
   elements.inputDialogValue.hidden = options.confirmOnly === true;
-  elements.inputDialogValue.rows = options.multiline ? 5 : 2;
+  elements.inputDialogValue.rows = Number(options.rows) || (options.multiline ? 5 : 2);
   elements.inputDialogConfirm.textContent = options.confirmLabel || "确定";
   elements.inputDialogCancel.textContent = options.cancelLabel || "取消";
   appShell?.setAttribute("inert", "");
@@ -2978,6 +2979,75 @@ function applyStyleToSelection() {
   });
 }
 
+async function copyTextToClipboard(text) {
+  try {
+    if (typeof navigator.clipboard?.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    console.warn("浏览器未允许直接写入剪贴板，将尝试兼容复制。", error);
+  }
+  const previousFocus = document.activeElement;
+  const textarea = document.createElement("textarea");
+  let copied = false;
+  try {
+    textarea.value = text;
+    textarea.readOnly = true;
+    textarea.tabIndex = -1;
+    textarea.setAttribute("aria-hidden", "true");
+    Object.assign(textarea.style, {
+      position: "fixed",
+      left: "-9999px",
+      top: "0",
+      opacity: "0",
+    });
+    document.body.append(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    copied = document.execCommand("copy");
+  } catch (error) {
+    console.warn("兼容剪贴板复制失败，将显示手动复制窗口。", error);
+  } finally {
+    textarea.remove();
+    try {
+      if (previousFocus?.isConnected && typeof previousFocus.focus === "function") previousFocus.focus();
+    } catch {}
+  }
+  return copied;
+}
+
+async function copyCurrentViewLatex() {
+  try {
+    const result = createTikzExport(documentModel, {
+      view,
+      canvasWidthPx: elements.geometryCanvas.getBoundingClientRect().width,
+    });
+    if (!result.exportedCount) {
+      showToast("当前视图没有可导出的可见对象", "warning");
+      return;
+    }
+    if (!await copyTextToClipboard(result.code)) {
+      await askUser("浏览器未允许自动复制；代码已选中，请按 Ctrl+C 手动复制。", result.code, {
+        title: "复制 LaTeX/TikZ 代码",
+        multiline: true,
+        rows: 12,
+        confirmLabel: "关闭",
+        cancelLabel: "关闭",
+      });
+      return;
+    }
+    const skipped = result.warnings.length
+      ? "；另有 " + result.warnings.length + " 项图片、交互或无效内容未包含"
+      : "";
+    showToast("已复制 " + result.exportedCount + " 个可见对象的 LaTeX/TikZ 代码" + skipped);
+  } catch (error) {
+    console.error("生成 LaTeX/TikZ 代码失败。", error);
+    showToast("生成 LaTeX/TikZ 代码失败，请检查当前画板", "error");
+  }
+}
+
 function downloadFallback(name, blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -3356,6 +3426,7 @@ elements.resetViewButton.addEventListener("click", () => {
 });
 elements.saveButton.addEventListener("click", () => saveDocument());
 elements.saveAsButton.addEventListener("click", saveDocumentAs);
+elements.copyLatexButton.addEventListener("click", copyCurrentViewLatex);
 elements.showHiddenButton.addEventListener("click", showAllHidden);
 elements.openButton.addEventListener("click", openProject);
 elements.insertImageButton.addEventListener("click", () => elements.imageInput.click());

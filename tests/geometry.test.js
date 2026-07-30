@@ -11,6 +11,7 @@ import {
 import { GeometryDocument } from "../src/core/document.js";
 import { DocumentHistory } from "../src/core/history.js";
 import { evaluateExpression, expressionIdentifiers } from "../src/core/expression.js";
+import { createTikzExport, escapeLatexText } from "../src/core/latex.js";
 import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "../src/core/selection.js";
 import { clientPointToWorld, fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "../src/core/view.js";
 
@@ -299,6 +300,123 @@ test("selected points and lines form every parallel and perpendicular pair", () 
     perpendiculars.map((line) => `${line.pointId}:${line.parentLineId}`),
     pairs.map(({ point, line }) => `${point.id}:${line.id}`),
   );
+});
+
+test("exports a complete standalone TikZ document for visible geometry", () => {
+  const document = new GeometryDocument();
+  const center = document.addFreePoint({ x: 50, y: 50 }, settings, "C");
+  const right = document.addFreePoint({ x: 70, y: 50 }, settings, "A");
+  const bottom = document.addFreePoint({ x: 50, y: 70 }, settings, "B");
+  document.addSegment(right.id, bottom.id, settings);
+  document.addLine(center.id, right.id, settings);
+  document.addRay(center.id, bottom.id, settings);
+  const circle = document.addCircle(center.id, right.id, settings);
+  document.addArcOnCircle(circle.id, right.id, bottom.id, settings);
+
+  const result = createTikzExport(document, {
+    view: { x: 0, y: 0, width: 100, height: 100 },
+    targetWidthCm: 10,
+  });
+
+  assert.equal(result.exportedCount, 8);
+  assert.match(result.code, /\\documentclass\[tikz,border=4pt\]\{standalone\}/);
+  assert.match(result.code, /\\begin\{tikzpicture\}/);
+  assert.match(result.code, /use as bounding box/);
+  assert.match(result.code, /\\clip \(0,0\) rectangle \(10,10\);/);
+  assert.match(result.code, /circle\[radius=2cm\]/);
+  assert.match(result.code, /delta angle=-90/);
+  assert.match(result.code, /\\node\[.*\]\s+at/);
+  assert.match(result.code, /\\end\{document\}/);
+  assert.doesNotMatch(result.code, /NaN|Infinity|undefined/);
+});
+
+test("escapes LaTeX control characters and preserves point subscripts", () => {
+  assert.equal(
+    escapeLatexText("\\{}$&#_%~^"),
+    "\\textbackslash{}\\{\\}\\$\\&\\#\\_\\%\\textasciitilde{}\\textasciicircum{}",
+  );
+  const document = new GeometryDocument();
+  document.addFreePoint({ x: 10, y: 10 }, settings, "P[1]");
+  document.addText({ x: 15, y: 25 }, "中文 A_1 & 50% # {x} \\", settings);
+  const result = createTikzExport(document, { view: { x: 0, y: 0, width: 100, height: 60 } });
+
+  assert.match(result.code, /\\usepackage\[UTF8\]\{ctex\}/);
+  assert.ok(result.code.includes("P\\textsubscript{1}"));
+  assert.ok(result.code.includes("中文 A\\_1 \\& 50\\% \\# \\{x\\} \\textbackslash{}"));
+});
+
+test("omits hidden, undefined and non-finite objects from TikZ output", () => {
+  const document = new GeometryDocument();
+  const hiddenParent = document.addFreePoint({ x: 10, y: 10 }, settings, "HIDDEN_PARENT");
+  const visibleParent = document.addFreePoint({ x: 90, y: 10 }, settings, "B");
+  document.addSegment(hiddenParent.id, visibleParent.id, settings);
+  document.setObjectsHidden([hiddenParent.id], true);
+  const hiddenText = document.addText({ x: 10, y: 20 }, "SECRET_TEXT", settings);
+  document.setObjectsHidden([hiddenText.id], true);
+  const sameA = document.addFreePoint({ x: 30, y: 30 }, settings);
+  const sameB = document.addFreePoint({ x: 40, y: 30 }, settings);
+  document.addLine(sameA.id, sameB.id, settings);
+  document.setFreePointPosition(sameB.id, { x: 30, y: 30 });
+  const invalidPoint = document.addFreePoint({ x: 60, y: 60 }, settings, "INVALID_POINT");
+  invalidPoint.definition.x = Number.POSITIVE_INFINITY;
+  const invalidLabel = document.addFreePoint({ x: 70, y: 70 }, settings, "BAD_OFFSET");
+  invalidLabel.labelOffset.x = Number.POSITIVE_INFINITY;
+  document.addDoodle([{ x: 1e308, y: 50 }, { x: -1e308, y: 50 }], settings);
+
+  const result = createTikzExport(document, { view: { x: 0, y: 0, width: 100, height: 100 } });
+
+  assert.ok(result.skippedCount >= 2);
+  assert.ok(!result.code.includes("HIDDEN\\_PARENT"));
+  assert.ok(!result.code.includes("SECRET\\_TEXT"));
+  assert.ok(!result.code.includes("INVALID\\_POINT"));
+  assert.ok(!result.code.includes("BAD\\_OFFSET"));
+  assert.match(result.code, /\\draw\[.*\] .* -- .*;/);
+  assert.doesNotMatch(result.code, /NaN|Infinity|null|undefined/);
+});
+
+test("clips exported lines to the viewport and preserves line style", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: -100, y: 50 }, settings);
+  const b = document.addFreePoint({ x: 200, y: 50 }, settings);
+  const line = document.addLine(a.id, b.id, settings);
+  document.applyStylePatch(line.id, { color: "#ff00aa", width: 0.5, dash: "dashed" });
+
+  const result = createTikzExport(document, {
+    view: { x: 0, y: 0, width: 100, height: 100 },
+    targetWidthCm: 10,
+  });
+
+  assert.ok(result.code.includes("{HTML}{FF00AA}"));
+  assert.ok(result.code.includes("line width=1.423pt"));
+  assert.ok(result.code.includes("dash pattern=on "));
+  assert.ok(result.code.includes("(0,5) -- (10,5)"));
+});
+
+test("skips one overflowing object without aborting the complete TikZ export", () => {
+  const document = new GeometryDocument();
+  document.addFreePoint({ x: 20, y: 20 }, settings, "SAFE_POINT");
+  document.addCoordinateSystem({ x: 50, y: 50 }, settings, {
+    unitX: 1e308,
+    unitY: 1e308,
+    gridType: "square",
+    showGrid: true,
+  });
+  document.addText(
+    { x: 10, y: 10 },
+    Array.from({ length: 300 }, (_, index) => "OVERFLOW_LINE_" + index).join("\n"),
+    settings,
+  );
+
+  const result = createTikzExport(document, {
+    view: { x: 0, y: 0, width: 100, height: 100 },
+    targetWidthCm: 12,
+  });
+
+  assert.ok(result.exportedCount >= 2);
+  assert.ok(result.skippedCount >= 1);
+  assert.ok(result.code.includes("SAFE\\_POINT"));
+  assert.ok(!result.code.includes("OVERFLOW\\_LINE"));
+  assert.doesNotMatch(result.code, /NaN|Infinity|null|undefined/);
 });
 
 test("point labels can be renamed and moved within a bounded area", () => {
