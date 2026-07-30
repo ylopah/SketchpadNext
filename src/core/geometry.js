@@ -134,6 +134,29 @@ export function clipParametricLineToRect(a, b, rect, ray = false) {
   };
 }
 
+export function clipLineGeometryToView(geometry, view, padding = null) {
+  if (geometry?.kind !== "line" || geometry.segment) return null;
+  const values = [
+    geometry.a?.x, geometry.a?.y, geometry.b?.x, geometry.b?.y,
+    view?.x, view?.y, view?.width, view?.height,
+  ].map(Number);
+  if (!values.every(Number.isFinite) || view.width <= 0 || view.height <= 0) return null;
+  const margin = padding !== null && padding !== undefined && Number.isFinite(Number(padding))
+    ? Math.max(0, Number(padding))
+    : Math.max(20, view.width / 50);
+  return clipParametricLineToRect(
+    geometry.a,
+    geometry.b,
+    {
+      x1: view.x - margin,
+      y1: view.y - margin,
+      x2: view.x + view.width + margin,
+      y2: view.y + view.height + margin,
+    },
+    geometry.ray,
+  );
+}
+
 export function lineLineIntersections(
   a1, a2, b1, b2,
   segmentA = false, segmentB = false,

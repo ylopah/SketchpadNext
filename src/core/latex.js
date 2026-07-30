@@ -460,7 +460,6 @@ export function createTikzExport(documentModel, options = {}) {
           "fill=" + color,
           "line width=" + formatNumber(Math.max(0.25, 2 * cssScalePt), 3) + "pt",
         ];
-        if (object.definition?.kind !== "free") pointOptions.push("dash pattern=on 1pt off 0.5pt");
         commands.push("\\filldraw[" + pointOptions.join(",") + "] " + coordinate(position)
           + " circle[radius=" + formatNumber(radius) + "cm];");
         if (object.style?.showLabel !== false && object.label != null) {

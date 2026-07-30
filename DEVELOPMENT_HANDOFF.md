@@ -57,7 +57,7 @@ http://127.0.0.1:4173/
 npm.cmd test
 ```
 
-当前共有 **74 项自动测试**，最后一次交接前运行全部通过。测试文件为：
+当前共有 **77 项自动测试**，最后一次交接前运行全部通过。测试文件为：
 
 ```text
 tests/geometry.test.js
@@ -90,6 +90,7 @@ npm.cmd test
 
 ```text
 SketchpadNext/
+├─ .github/workflows/pages.yml
 ├─ SketchpadNext.html
 ├─ index.html
 ├─ styles.css
@@ -125,7 +126,7 @@ SketchpadNext/
 - `styles.css`：整体布局、工具状态、SVG对象样式和响应式界面。
 - `src/app.js`：界面状态、选择与拖动、构造命令、渲染、保存/打开和快捷键。目前文件较大，后续可逐步拆分，但拆分前必须保持行为测试。
 - `src/core/document.js`：对象模型、动态依赖、几何求值、命中测试、度量文字、序列化、复制和旧数据升级。
-- `src/core/geometry.js`：无状态几何算法。
+- `src/core/geometry.js`：无状态几何算法，以及直线、射线相对当前视图的裁剪。
 - `src/core/expression.js`：不使用 `eval` 的安全表达式解析和计算。
 - `src/core/history.js`：完整文档快照形式的撤销/重做。
 - `src/core/latex.js`：把当前文档和视图求值为静态 TikZ/LaTeX，处理坐标翻转、裁剪、样式、文本转义与不支持对象提示。
@@ -133,6 +134,7 @@ SketchpadNext/
 - `src/core/view.js`：鼠标缩放、画布平移和双指手势共用的纯视图变换。
 - `build-standalone.mjs`：将 HTML、CSS 和 ES Module 打包到 `SketchpadNext.html`，不使用第三方依赖。
 - `server.mjs`：无依赖本地静态服务器，默认端口 `4173`。
+- `.github/workflows/pages.yml`：每次推送 `main` 后自动发布 GitHub Pages 静态网站。
 
 ## 6. 当前已完成的主要能力
 
@@ -240,7 +242,7 @@ sketchpad-next.files.v1
 
 这些不一定是错误，但接手者应知晓：
 
-- `src/app.js` 已超过十万字节，后续适合按渲染、交互、文件、菜单命令拆分；拆分要小步进行并保持 74 项测试。
+- `src/app.js` 已超过十万字节，后续适合按渲染、交互、文件、菜单命令拆分；拆分要小步进行并保持 77 项测试。
 - 当前自动测试主要覆盖核心模型和纯视图变换；本轮之前已人工回归派生点拖动、角度度量、分步 Esc、样式默认值隔离和对话框焦点，文件选择与真实触屏设备仍应人工检查。
 - 文件句柄持久化依赖 Chromium 的 File System Access API 和 IndexedDB。
 - 两条没有明确角区域的线直接测角时，返回较小夹角；需要有方向或反角语义时，应先创建角标记再测量。
@@ -252,7 +254,7 @@ sketchpad-next.files.v1
 ## 10. 下一位开发者开始工作的建议顺序
 
 1. 解压后阅读本文件和三份项目说明。
-2. 运行 `npm.cmd test`，确认 74 项通过。
+2. 运行 `npm.cmd test`，确认 77 项通过。
 3. 双击 `SketchpadNext.html`，检查页面可操作。
 4. 人工检查以下链路：
    - 新建三点和过三点圆，确认出现动态圆心。

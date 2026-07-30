@@ -1,7 +1,7 @@
 import { GeometryDocument } from "./core/document.js";
 import { DocumentHistory } from "./core/history.js";
-import { clipParametricLineToRect } from "./core/geometry.js";
-import { fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "./core/view.js";
+import { clipLineGeometryToView } from "./core/geometry.js";
+import { clientPointToWorld, fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "./core/view.js";
 import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "./core/selection.js";
 import { createTikzExport } from "./core/latex.js";
 
@@ -611,18 +611,7 @@ function renderShape(object, layer = elements.objectLayer) {
     if (geometry.segment) {
       endpoints = { x1: geometry.a.x, y1: geometry.a.y, x2: geometry.b.x, y2: geometry.b.y };
     } else {
-      const padding = Math.max(20, view.width / 50);
-      const clipped = clipParametricLineToRect(
-        geometry.a,
-        geometry.b,
-        {
-          x1: view.x - padding,
-          y1: view.y - padding,
-          x2: view.x + view.width + padding,
-          y2: view.y + view.height + padding,
-        },
-        geometry.ray,
-      );
+      const clipped = clipLineGeometryToView(geometry, view);
       if (!clipped) return;
       endpoints = {
         x1: clipped.a.x,
@@ -928,11 +917,11 @@ function activateTool(tool) {
 }
 
 function clientToWorld(event, snapToGrid = false) {
-  const point = elements.geometryCanvas.createSVGPoint();
-  point.x = event.clientX;
-  point.y = event.clientY;
-  const result = point.matrixTransform(elements.geometryCanvas.getScreenCTM().inverse());
-  let world = { x: result.x, y: result.y };
+  let world = clientPointToWorld(
+    view,
+    elements.geometryCanvas.getBoundingClientRect(),
+    { x: event.clientX, y: event.clientY },
+  );
   if (snapToGrid && settings.snapToGrid && !event.altKey) {
     const size = Number(settings.gridSize) || 20;
     world = { x: Math.round(world.x / size) * size, y: Math.round(world.y / size) * size };
@@ -1442,7 +1431,6 @@ function handleSinglePointerMove(event) {
       { x: panState.startX, y: panState.startY },
       { x: event.clientX, y: event.clientY },
     );
-    updateViewBox();
     scheduleRender();
     return;
   }
@@ -1541,6 +1529,7 @@ function handleSinglePointerUp(event) {
   if (panState) {
     panState = null;
     elements.geometryCanvas.classList.remove("panning");
+    render();
     try { elements.geometryCanvas.releasePointerCapture(event.pointerId); } catch {}
     return;
   }
@@ -1814,7 +1803,6 @@ async function handleTouchPointerMove(event) {
         touchPoint(sample),
       );
     }
-    updateViewBox();
     scheduleRender();
     return;
   }
@@ -1867,6 +1855,7 @@ async function handleTouchPointerUp(event) {
         endTouchGesture();
         touchDrainActive = activeTouchPoints.size > 0;
       }
+      render();
       try { elements.geometryCanvas.releasePointerCapture(event.pointerId); } catch {}
       return;
     }
@@ -1974,7 +1963,6 @@ function handleWheel(event) {
   view = zoomViewAtClientPoint(
     view, rect, { x: event.clientX, y: event.clientY }, factor, { minWidth: 180, maxWidth: 8000 },
   );
-  updateViewBox();
   scheduleRender();
 }
 

@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   circleCircleIntersections,
+  clipLineGeometryToView,
   clipParametricLineToRect,
   lineCircleIntersections,
   lineLineIntersections,
@@ -69,6 +71,36 @@ test("clips infinite lines and rays to the visible rectangle", () => {
     clipParametricLineToRect({ x: 20, y: 90 }, { x: 30, y: 90 }, rectangle),
     null,
   );
+});
+
+test("reclips infinite lines and rays for every pan and zoom view", () => {
+  const line = {
+    kind: "line",
+    a: { x: 20, y: 30 },
+    b: { x: 30, y: 30 },
+    segment: false,
+    ray: false,
+  };
+  assert.deepEqual(
+    clipLineGeometryToView(line, { x: 0, y: 0, width: 100, height: 80 }),
+    { a: { x: -20, y: 30 }, b: { x: 120, y: 30 } },
+  );
+  assert.deepEqual(
+    clipLineGeometryToView(line, { x: 100, y: 20, width: 100, height: 80 }),
+    { a: { x: 80, y: 30 }, b: { x: 220, y: 30 } },
+  );
+  assert.deepEqual(
+    clipLineGeometryToView(line, { x: 25, y: 20, width: 25, height: 20 }),
+    { a: { x: 5, y: 30 }, b: { x: 70, y: 30 } },
+  );
+  assert.deepEqual(
+    clipLineGeometryToView({ ...line, ray: true }, { x: 100, y: 20, width: 100, height: 80 }),
+    { a: { x: 80, y: 30 }, b: { x: 220, y: 30 } },
+  );
+
+  const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.doesNotMatch(appSource, /updateViewBox\(\);\s*scheduleRender\(\);/);
+  assert.match(appSource, /clientPointToWorld\(\s*view,/);
 });
 
 test("finds line-line intersection", () => {
@@ -392,6 +424,21 @@ test("clips exported lines to the viewport and preserves line style", () => {
   assert.ok(result.code.includes("(0,5) -- (10,5)"));
 });
 
+test("derived point borders stay solid in the browser and TikZ output", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 20, y: 20 }, settings);
+  const b = document.addFreePoint({ x: 80, y: 20 }, settings);
+  document.addMidpoint(a.id, b.id, settings);
+  const result = createTikzExport(document, {
+    view: { x: 0, y: 0, width: 100, height: 100 },
+  });
+  const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+
+  assert.match(styles, /\.geometry-point\s*\{[^}]*stroke-dasharray:\s*none/);
+  assert.doesNotMatch(styles, /\.geometry-point\.derived\s*\{[^}]*stroke-dasharray/);
+  assert.doesNotMatch(result.code, /\\filldraw\[[^\]]*dash pattern/);
+});
+
 test("skips one overflowing object without aborting the complete TikZ export", () => {
   const document = new GeometryDocument();
   document.addFreePoint({ x: 20, y: 20 }, settings, "SAFE_POINT");
@@ -504,6 +551,11 @@ test("circle through three points computes a dynamic circumcircle", () => {
   const center = document.getObject(circle.centerPointId);
   assert.equal(center.type, "point");
   assert.equal(center.definition.kind, "circumcenter");
+  assert.equal(center.label, "圆心");
+  assert.equal(center.style.showLabel, false);
+  assert.equal(document.nextLabel, 3);
+  const nextPoint = document.addFreePoint({ x: 8, y: 8 }, settings);
+  assert.equal(nextPoint.label, "D");
   let geometry = document.getShapeGeometry(circle);
   close(geometry.center.x, 2);
   close(geometry.center.y, 1.5);
@@ -533,8 +585,25 @@ test("legacy three-point circles gain a visible dynamic center when loaded", () 
   const restoredCircle = restored.getObject(circle.id);
   const restoredCenter = restored.getObject(restoredCircle.centerPointId);
   assert.equal(restoredCenter.definition.kind, "circumcenter");
+  assert.equal(restoredCenter.label, "圆心");
+  assert.equal(restoredCenter.style.showLabel, false);
+  assert.equal(restored.addFreePoint({ x: 8, y: 8 }, settings).label, "D");
   close(restored.getPointPosition(restoredCenter).x, 2);
   close(restored.getPointPosition(restoredCenter).y, 2);
+});
+
+test("copying a three-point circle does not spend a point label on its center", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const b = document.addFreePoint({ x: 4, y: 0 }, settings);
+  const c = document.addFreePoint({ x: 0, y: 4 }, settings);
+  const circle = document.addThreePointCircle(a.id, b.id, c.id, settings);
+  const [copy] = document.duplicateObjects([circle.id], { x: 10, y: 10 });
+  const copiedCenter = document.getObject(copy.centerPointId);
+
+  assert.equal(copiedCenter.label, "圆心");
+  assert.equal(copiedCenter.style.showLabel, false);
+  assert.equal(document.addFreePoint({ x: 20, y: 20 }, settings).label, "G");
 });
 
 test("circle using a segment as radius follows the segment length", () => {

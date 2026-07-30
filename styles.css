@@ -197,10 +197,9 @@ button { color: inherit; }
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
-.geometry-point { cursor: crosshair; vector-effect: non-scaling-stroke; stroke: white; stroke-width: 2px; filter: url(#pointShadow); }
+.geometry-point { cursor: crosshair; vector-effect: non-scaling-stroke; stroke: white; stroke-width: 2px; stroke-dasharray: none; filter: url(#pointShadow); }
 .geometry-point.dependency-movable { cursor: crosshair; }
 .geometry-point.fixed-point { cursor: default; }
-.geometry-point.derived { stroke-dasharray: 2 1; }
 .geometry-point.selected-visible { stroke: var(--accent); stroke-width: 3px; }
 .geometry-point.marked-center { stroke: #e11d48; stroke-width: 4px; }
 .point-label { font-family: "Cambria Math", "Times New Roman", serif; font-size: 17px; font-style: italic; fill: #273142; pointer-events: auto; cursor: move; paint-order: stroke; stroke: white; stroke-width: 4px; stroke-linejoin: round; }

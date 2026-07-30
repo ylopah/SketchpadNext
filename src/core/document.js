@@ -32,6 +32,24 @@ function defaultPointStyle(settings) {
   };
 }
 
+function automaticCircumcenterPoint(id, parents, settings = {}) {
+  return {
+    id,
+    type: "point",
+    definition: { kind: "circumcenter", parents: [...parents] },
+    label: "圆心",
+    labelOffset: { x: 12, y: -12 },
+    style: { ...defaultPointStyle(settings), showLabel: false },
+  };
+}
+
+function isAutomaticCircumcenter(point) {
+  return point?.type === "point"
+    && point.definition?.kind === "circumcenter"
+    && point.label === "圆心"
+    && point.style?.showLabel === false;
+}
+
 function defaultShapeStyle(settings) {
   return {
     width: Number(settings.lineWidth) || 2,
@@ -117,17 +135,10 @@ export class GeometryDocument {
     const additions = [];
     for (const object of this.objects) {
       if (object.type !== "threePointCircle" || object.centerPointId) continue;
-      const center = {
-        id: this.#id(),
-        type: "point",
-        definition: {
-          kind: "circumcenter",
-          parents: [object.pointAId, object.pointBId, object.pointCId],
-        },
-        label: labelForIndex(this.nextLabel++),
-        labelOffset: { x: 12, y: -12 },
-        style: defaultPointStyle({}),
-      };
+      const center = automaticCircumcenterPoint(
+        this.#id(),
+        [object.pointAId, object.pointBId, object.pointCId],
+      );
       object.centerPointId = center.id;
       additions.push(center);
     }
@@ -178,7 +189,7 @@ export class GeometryDocument {
   }
 
   #inferNextLabel() {
-    return this.objects.filter((object) => object.type === "point").length;
+    return this.objects.filter((object) => object.type === "point" && !isAutomaticCircumcenter(object)).length;
   }
 
   #validate() {
@@ -732,8 +743,7 @@ export class GeometryDocument {
     if (object.type === "circle") return `圆 ${pointLabel(object.centerId)}`;
     if (object.type === "radiusCircle") return `圆 ${pointLabel(object.centerId)}`;
     if (object.type === "threePointCircle") {
-      return object.centerPointId ? `圆 ${pointLabel(object.centerPointId)}`
-        : `过 ${pointLabel(object.pointAId)}、${pointLabel(object.pointBId)}、${pointLabel(object.pointCId)} 三点的圆`;
+      return `过 ${pointLabel(object.pointAId)}、${pointLabel(object.pointBId)}、${pointLabel(object.pointCId)} 三点的圆`;
     }
     if (object.type === "arc") return `弧 ${pair(object.startPointId, object.endPointId)}`;
     if (object.type === "threePointArc") {
@@ -1324,6 +1334,9 @@ export class GeometryDocument {
     for (const id of requested) visit(id);
     this.#normalizePaintOrder();
     const ordered = sourceDocument.objects.filter((object) => closure.has(object.id));
+    const automaticCircleCenterIds = new Set(sourceDocument.objects
+      .filter((object) => object.type === "threePointCircle" && object.centerPointId)
+      .map((object) => object.centerPointId));
     const idMap = new Map(ordered.map((object) => [object.id, this.#id()]));
     const remap = (value) => {
       if (typeof value === "string") return idMap.get(value) || value;
@@ -1337,7 +1350,10 @@ export class GeometryDocument {
       object.id = idMap.get(source.id);
       object.hidden = false;
       if (object.type === "point") {
-        object.label = labelForIndex(this.nextLabel++);
+        if (object.definition?.kind === "circumcenter" && automaticCircleCenterIds.has(source.id)) {
+          object.label = "圆心";
+          object.style = { ...defaultPointStyle({}), ...object.style, showLabel: false };
+        } else object.label = labelForIndex(this.nextLabel++);
         if (object.definition.kind === "free") { object.definition.x += dx; object.definition.y += dy; }
       } else if (TEXT_TYPES.has(object.type) || MEDIA_TYPES.has(object.type)) { object.x += dx; object.y += dy; }
       else if (object.type === "doodle") object.points = object.points.map((point) => ({ x: point.x + dx, y: point.y + dy }));
@@ -1471,14 +1487,7 @@ export class GeometryDocument {
     if (new Set(ids).size !== 3 || ids.some((id) => !this.isPoint(id))) return null;
     const positions = ids.map((id) => this.getPointPosition(id));
     if (positions.some((point) => !point) || !circumcircleFromPoints(...positions)) return null;
-    const center = {
-      id: this.#id(),
-      type: "point",
-      definition: { kind: "circumcenter", parents: [...ids] },
-      label: labelForIndex(this.nextLabel++),
-      labelOffset: { x: 12, y: -12 },
-      style: defaultPointStyle(settings),
-    };
+    const center = automaticCircumcenterPoint(this.#id(), ids, settings);
     const object = {
       id: this.#id(),
       type: "threePointCircle",
