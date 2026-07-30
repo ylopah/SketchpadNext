@@ -2,6 +2,7 @@ import { GeometryDocument } from "./core/document.js";
 import { DocumentHistory } from "./core/history.js";
 import { clipParametricLineToRect } from "./core/geometry.js";
 import { fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "./core/view.js";
+import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "./core/selection.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SETTINGS_KEY = "sketchpad-next.settings.v1";
@@ -92,8 +93,8 @@ const toolDescriptions = {
   ray: "先选射线端点，再选方向点",
   midpoint: "选择一条线段，或依次选择两个点创建动态中点",
   perpendicularBisector: "选择一条线段，或依次选择两个点创建中垂线",
-  parallel: "先选择一个点，再选择作为方向基准的线",
-  perpendicular: "先选择一个点，再选择需要垂直的基准线",
+  parallel: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
+  perpendicular: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
   angleBisector: "按角的书写顺序选择：第一边上的点、顶点、第二边上的点",
   marker: "在角的顶点按下并向角内拖动；点击已有灰色标识可切换 1～4 道弧线",
   info: "点击对象查看类型、父对象和子对象；按住 Shift 可让信息保持显示",
@@ -336,9 +337,13 @@ function cancelIncompleteConstruction() {
   );
   if (!hasActiveStep) return false;
   const snapshot = constructionStartSnapshot || pathMarkDragState?.snapshot || dragState?.snapshot;
+  const dragSelectionBefore = Array.isArray(dragState?.selectionBefore) ? dragState.selectionBefore : null;
   const restoredSelection = marqueeState
     ? [...marqueeState.baseSelection]
-    : panState || touchGesture || touchIntent ? [...selectedIds] : [];
+    : dragSelectionBefore
+      ? [...dragSelectionBefore]
+      : panState || touchGesture || touchIntent ? [...selectedIds] : [];
+  const restoredPrimary = dragSelectionBefore ? dragState.primaryBefore : null;
   if (snapshot) documentModel = GeometryDocument.fromJSON(snapshot);
   const capturedPointerIds = new Set([
     ...activeStates.map((state) => state?.pointerId).filter((id) => id != null),
@@ -367,7 +372,7 @@ function cancelIncompleteConstruction() {
   for (const pointerId of capturedPointerIds) {
     try { elements.geometryCanvas.releasePointerCapture(pointerId); } catch {}
   }
-  setSelection(restoredSelection);
+  setSelection(restoredSelection, restoredPrimary);
   return true;
 }
 
@@ -914,6 +919,13 @@ function setTool(tool) {
   render();
 }
 
+function activateTool(tool) {
+  const restored = cancelIncompleteConstruction();
+  if (restored) afterDocumentChange();
+  if (["parallel", "perpendicular"].includes(tool) && constructDerivedLinesFromSelection(tool)) return;
+  setTool(tool);
+}
+
 function clientToWorld(event, snapToGrid = false) {
   const point = elements.geometryCanvas.createSVGPoint();
   point.x = event.clientX;
@@ -1310,16 +1322,26 @@ async function handleSinglePointerDown(event) {
       return;
     }
 
-    const wasSelected = isSelected(hit.object.id);
+    const primaryBefore = selectedId;
+    const selectionIntent = selectionDragIntent(selectedIds, hit.object.id);
+    const wasSelected = selectionIntent.wasSelected;
     if (!wasSelected) {
-      const next = new Set(selectedIds);
-      next.add(hit.object.id);
-      setSelection([...next], hit.object.id);
+      setSelection(selectionIntent.pointerDownSelection, hit.object.id);
     } else selectedId = hit.object.id;
+    const dragSelectionState = {
+      clickedId: hit.object.id,
+      toggleOnClick: wasSelected,
+      exclusiveOnDrag: selectionIntent.exclusiveOnDrag,
+      exclusiveSelectionApplied: false,
+      dragSelection: selectionIntent.dragSelection,
+      selectionBefore: selectionIntent.before,
+      primaryBefore,
+      startClient: { x: event.clientX, y: event.clientY },
+    };
 
     if (hit.object.locked) {
       dragState = {
-        kind: "selectionClick", clickedId: hit.object.id, toggleOnClick: wasSelected,
+        kind: "selectionClick", ...dragSelectionState,
         pointerId: event.pointerId, start: { ...pointerWorld }, changed: false,
         blockedReason: "对象已锁定；可在“显示”菜单中解除锁定",
       };
@@ -1328,7 +1350,7 @@ async function handleSinglePointerDown(event) {
       return;
     }
 
-    if (["text", "measurement", "parameter", "calculation", "table", "actionButton", "image"].includes(hit.object.type) && selectedIds.size === 1) {
+    if (["text", "measurement", "parameter", "calculation", "table", "actionButton", "image"].includes(hit.object.type) && selectionIntent.dragSelection.length === 1) {
       dragState = {
         kind: "text",
         textId: hit.object.id,
@@ -1336,25 +1358,23 @@ async function handleSinglePointerDown(event) {
         start: { ...pointerWorld },
         original: { x: hit.object.x, y: hit.object.y },
         snapshot: documentModel.serialize(),
-        clickedId: hit.object.id,
-        toggleOnClick: wasSelected,
+        ...dragSelectionState,
         changed: false,
       };
       captureCanvasPointer(event.pointerId);
-    } else if (hit.object.type === "point" && selectedIds.size === 1 && documentModel.isPointDirectlyMovable(hit.object)) {
+    } else if (hit.object.type === "point" && selectionIntent.dragSelection.length === 1 && documentModel.isPointDirectlyMovable(hit.object)) {
       dragState = {
         kind: "point",
         pointId: hit.object.id,
         pointerId: event.pointerId,
         start: { ...pointerWorld },
         snapshot: documentModel.serialize(),
-        clickedId: hit.object.id,
-        toggleOnClick: wasSelected,
+        ...dragSelectionState,
         changed: false,
       };
       captureCanvasPointer(event.pointerId);
     } else {
-      const objectIds = isSelected(hit.object.id) ? [...selectedIds] : [hit.object.id];
+      const objectIds = selectionIntent.dragSelection;
       if (documentModel.canTranslateObjects(objectIds)) {
         dragState = {
           kind: "translation",
@@ -1363,16 +1383,14 @@ async function handleSinglePointerDown(event) {
           last: { ...pointerWorld },
           objectIds,
           snapshot: documentModel.serialize(),
-          clickedId: hit.object.id,
-          toggleOnClick: wasSelected,
+          ...dragSelectionState,
           changed: false,
         };
         captureCanvasPointer(event.pointerId);
       } else {
         dragState = {
           kind: "selectionClick",
-          clickedId: hit.object.id,
-          toggleOnClick: wasSelected,
+          ...dragSelectionState,
           pointerId: event.pointerId,
           start: { ...pointerWorld },
           blockedReason: "该对象由数据或固定坐标决定，不能直接拖动",
@@ -1428,6 +1446,15 @@ function handleSinglePointerMove(event) {
     return;
   }
   if (dragState) {
+    if (dragState.exclusiveOnDrag && !dragState.exclusiveSelectionApplied) {
+      if (!hasExceededDragThreshold(
+        dragState.startClient,
+        { x: event.clientX, y: event.clientY },
+      )) return;
+      setSelection(dragState.dragSelection, dragState.clickedId);
+      dragState.exclusiveSelectionApplied = true;
+      scheduleRender();
+    }
     if (dragState.kind === "selectionClick") {
       if (dragState.blockedReason && !dragState.feedbackShown && dragState.start && Math.hypot(
         pointerWorld.x - dragState.start.x,
@@ -1644,6 +1671,9 @@ function handleSinglePointerUp(event) {
   if (event.type === "pointercancel") {
     dragState = null;
     if (finishedDrag.snapshot) documentModel = GeometryDocument.fromJSON(finishedDrag.snapshot);
+    if (Array.isArray(finishedDrag.selectionBefore)) {
+      setSelection(finishedDrag.selectionBefore, finishedDrag.primaryBefore);
+    }
     try { elements.geometryCanvas.releasePointerCapture(event.pointerId); } catch {}
     render();
     return;
@@ -2288,20 +2318,21 @@ function constructPerpendicularBisectorsFromSelection() {
 
 function constructDerivedLinesFromSelection(type) {
   const selection = selectedObjects();
-  const points = selection.filter((object) => object.type === "point");
-  const lines = selection.filter((object) => documentModel.getShapeGeometry(object)?.kind === "line");
-  const pairs = [];
-  if (points.length === 1 && lines.length >= 1 && points.length + lines.length === selection.length) {
-    for (const line of lines) pairs.push([points[0], line]);
-  } else if (lines.length === 1 && points.length >= 1 && points.length + lines.length === selection.length) {
-    for (const point of points) pairs.push([point, lines[0]]);
-  } else return false;
+  if (selection.some((object) => object.type === "point" && !documentModel.getPointPosition(object))) return false;
+  const pairs = pointLinePairs(
+    selection,
+    (object) => documentModel.getShapeGeometry(object)?.kind === "line",
+  );
+  if (!pairs.length) return false;
+  let created = [];
   mutate(() => {
-    const created = pairs.map(([point, line]) => type === "parallel"
+    created = pairs.map(({ point, line }) => type === "parallel"
       ? documentModel.addParallelLine(point.id, line.id, settings)
       : documentModel.addPerpendicularLine(point.id, line.id, settings)).filter(Boolean);
     setSelection(created.map((shape) => shape.id), created.at(-1)?.id || null);
   });
+  if (!created.length) return false;
+  showToast(`已批量构造 ${created.length} 条${type === "parallel" ? "平行线" : "垂线"}`);
   return true;
 }
 
@@ -2457,8 +2488,8 @@ function runConstructionCommand(command) {
     const requirement = {
       segment: "请选择至少两个点", line: "请选择至少两个点", ray: "请选择至少两个点",
       midpoint: "请选择一条或多条线段", intersection: "请选择两个相交的线形或圆形对象",
-      perpendicularBisector: "请选择一条或多条线段", parallel: "请选择一个点和一条或多条基准线",
-      perpendicular: "请选择一个点和一条或多条基准线", angleBisector: "请按顺序选择边上点、顶点、边上点",
+      perpendicularBisector: "请选择一条或多条线段", parallel: "请至少选择一个点和一条基准线，可同时多选",
+      perpendicular: "请至少选择一个点和一条基准线，可同时多选", angleBisector: "请按顺序选择边上点、顶点、边上点",
       circle: "请选择圆心与圆上一点，或一个点与一条半径线段", threePointCircle: "请选择三个不共线的点",
       arc: "请选择一个圆以及圆上的两个点", threePointArc: "请选择三个不共线的点",
       circleInterior: "请选择一个或多个圆", sectorInterior: "请选择一条或多条圆弧",
@@ -3241,7 +3272,7 @@ function handleKeyDown(event) {
     n: "perpendicularBisector", r: "parallel", t: "perpendicular", b: "angleBisector", k: "marker", i: "info", x: "text",
     c: "circle", o: "threePointCircle",
   }[event.key.toLowerCase()];
-  if (shortcut) setTool(shortcut);
+  if (shortcut) activateTool(shortcut);
 }
 
 function handleKeyUp(event) {
@@ -3267,7 +3298,7 @@ appShell?.addEventListener("pointerdown", (event) => {
   if (elements.geometryCanvas.contains(event.target)) return;
   if (cancelIncompleteConstruction()) afterDocumentChange();
 }, true);
-document.querySelectorAll(".tool-button[data-tool]").forEach((button) => button.addEventListener("click", () => setTool(button.dataset.tool)));
+document.querySelectorAll(".tool-button[data-tool]").forEach((button) => button.addEventListener("click", () => activateTool(button.dataset.tool)));
 elements.geometryCanvas.addEventListener("pointerdown", handlePointerDown);
 elements.geometryCanvas.addEventListener("pointermove", handlePointerMove);
 elements.geometryCanvas.addEventListener("pointerup", handlePointerUp);

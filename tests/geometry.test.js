@@ -11,6 +11,7 @@ import {
 import { GeometryDocument } from "../src/core/document.js";
 import { DocumentHistory } from "../src/core/history.js";
 import { evaluateExpression, expressionIdentifiers } from "../src/core/expression.js";
+import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "../src/core/selection.js";
 import { clientPointToWorld, fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "../src/core/view.js";
 
 const settings = {
@@ -199,6 +200,23 @@ test("rectangle selection finds points and crossing shapes", () => {
   assert.ok(!hits.some((object) => object.id === a.id));
 });
 
+test("a newly dragged object becomes the sole selection after a CSS-pixel threshold", () => {
+  const newTarget = selectionDragIntent(["A"], "B");
+  assert.deepEqual(newTarget.pointerDownSelection, ["A", "B"]);
+  assert.deepEqual(newTarget.dragSelection, ["B"]);
+  assert.equal(newTarget.exclusiveOnDrag, true);
+  assert.equal(hasExceededDragThreshold({ x: 10, y: 10 }, { x: 14, y: 10 }), false);
+  assert.equal(hasExceededDragThreshold({ x: 10, y: 10 }, { x: 15, y: 10 }), true);
+
+  const selectedTarget = selectionDragIntent(["A", "B"], "B");
+  assert.deepEqual(selectedTarget.dragSelection, ["A", "B"]);
+  assert.equal(selectedTarget.exclusiveOnDrag, false);
+
+  const firstTarget = selectionDragIntent([], "B");
+  assert.deepEqual(firstTarget.dragSelection, ["B"]);
+  assert.equal(firstTarget.exclusiveOnDrag, false);
+});
+
 test("shape dependencies expose the free points required for translation", () => {
   const document = new GeometryDocument();
   const center = document.addFreePoint({ x: 3, y: 4 }, settings);
@@ -237,6 +255,50 @@ test("parallel and perpendicular lines follow their base line", () => {
   close(baseDirection.x * perpendicularDirection.x + baseDirection.y * perpendicularDirection.y, 0);
   assert.deepEqual(parallelGeometry.a, { x: 2, y: 8 });
   assert.deepEqual(perpendicularGeometry.a, { x: 2, y: 8 });
+});
+
+test("selected points and lines form every parallel and perpendicular pair", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const b = document.addFreePoint({ x: 10, y: 0 }, settings);
+  const c = document.addFreePoint({ x: 0, y: 10 }, settings);
+  const d = document.addFreePoint({ x: 10, y: 10 }, settings);
+  const firstPoint = document.addFreePoint({ x: 3, y: 4 }, settings);
+  const secondPoint = document.addFreePoint({ x: 7, y: 8 }, settings);
+  const firstLine = document.addLine(a.id, b.id, settings);
+  const secondLine = document.addSegment(a.id, c.id, settings);
+  const thirdLine = document.addRay(b.id, d.id, settings);
+  const isLine = (object) => document.getShapeGeometry(object)?.kind === "line";
+  const pairs = pointLinePairs([firstPoint, firstLine, secondPoint, secondLine, thirdLine], isLine);
+
+  assert.deepEqual(
+    pairs.map(({ point, line }) => `${point.id}:${line.id}`),
+    [
+      `${firstPoint.id}:${firstLine.id}`,
+      `${firstPoint.id}:${secondLine.id}`,
+      `${firstPoint.id}:${thirdLine.id}`,
+      `${secondPoint.id}:${firstLine.id}`,
+      `${secondPoint.id}:${secondLine.id}`,
+      `${secondPoint.id}:${thirdLine.id}`,
+    ],
+  );
+  assert.equal(pointLinePairs([firstPoint, firstLine, secondLine, thirdLine], isLine).length, 3);
+  assert.equal(pointLinePairs([firstPoint, secondPoint, firstLine], isLine).length, 2);
+  const circle = document.addCircle(a.id, b.id, settings);
+  assert.deepEqual(pointLinePairs([firstPoint, firstLine, circle], isLine), []);
+
+  const parallels = pairs.map(({ point, line }) => document.addParallelLine(point.id, line.id, settings));
+  const perpendiculars = pairs.map(({ point, line }) => document.addPerpendicularLine(point.id, line.id, settings));
+  assert.equal(parallels.filter(Boolean).length, 6);
+  assert.equal(perpendiculars.filter(Boolean).length, 6);
+  assert.deepEqual(
+    parallels.map((line) => `${line.pointId}:${line.parentLineId}`),
+    pairs.map(({ point, line }) => `${point.id}:${line.id}`),
+  );
+  assert.deepEqual(
+    perpendiculars.map((line) => `${line.pointId}:${line.parentLineId}`),
+    pairs.map(({ point, line }) => `${point.id}:${line.id}`),
+  );
 });
 
 test("point labels can be renamed and moved within a bounded area", () => {

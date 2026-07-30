@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (relativePath) => readFile(path.join(root, relativePath), "utf8");
 
-const [htmlSource, styles, geometry, expression, documentModel, history, view, app] = await Promise.all([
+const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, app] = await Promise.all([
   read("index.html"),
   read("styles.css"),
   read("src/core/geometry.js"),
@@ -13,6 +13,7 @@ const [htmlSource, styles, geometry, expression, documentModel, history, view, a
   read("src/core/document.js"),
   read("src/core/history.js"),
   read("src/core/view.js"),
+  read("src/core/selection.js"),
   read("src/app.js"),
 ]);
 
@@ -22,6 +23,7 @@ const moduleSources = JSON.stringify({
   documentModel,
   history,
   view,
+  selection,
   app,
 }).replaceAll("<", "\\u003c");
 
@@ -42,11 +44,13 @@ const bootstrap = `    <script>
           .replaceAll("./expression.js", expressionUrl));
         const historyUrl = createModule(sources.history.replaceAll("./document.js", documentUrl));
         const viewUrl = createModule(sources.view);
+        const selectionUrl = createModule(sources.selection);
         const appUrl = createModule(sources.app
           .replaceAll("./core/document.js", documentUrl)
           .replaceAll("./core/history.js", historyUrl)
           .replaceAll("./core/geometry.js", geometryUrl)
-          .replaceAll("./core/view.js", viewUrl));
+          .replaceAll("./core/view.js", viewUrl)
+          .replaceAll("./core/selection.js", selectionUrl));
 
         import(appUrl)
           .catch((error) => {
