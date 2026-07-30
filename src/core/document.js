@@ -4,7 +4,10 @@ import {
   distance,
   intersectGeometries,
   projectPointToLine,
+  triangleCentroid,
+  triangleIncircle,
   triangleIncenter,
+  triangleOrthocenter,
 } from "./geometry.js";
 import { evaluateExpression, expressionIdentifiers, validateIdentifier } from "./expression.js";
 
@@ -12,7 +15,7 @@ const POINT_TYPES = new Set(["point"]);
 const TEXT_TYPES = new Set(["text", "measurement", "parameter", "calculation", "table", "actionButton"]);
 const MEDIA_TYPES = new Set(["image"]);
 const SHAPE_TYPES = new Set([
-  "segment", "line", "ray", "circle", "radiusCircle", "threePointCircle", "arc", "threePointArc",
+  "segment", "line", "ray", "circle", "radiusCircle", "threePointCircle", "incircle", "arc", "threePointArc",
   "parallelLine", "perpendicularLine", "perpendicularBisector", "angleBisector", "angleMark", "pathMark", "doodle",
   "circleInterior", "sectorInterior", "segmentInterior",
   "coordinateSystem", "functionGraph", "parametricPlot",
@@ -27,7 +30,7 @@ function clone(value) {
 function defaultPointStyle(settings) {
   return {
     radius: Number(settings.pointSize) || 6,
-    color: settings.pointColor || "#2563eb",
+    color: settings.pointColor || "#000000",
     showLabel: settings.showLabels !== false,
   };
 }
@@ -337,7 +340,7 @@ export class GeometryDocument {
       content: normalized,
       style: {
         color: settings.lineColor || "#334155",
-        fontSize: Number(settings.textSize) || 18,
+        fontSize: Number(settings.textFontSize ?? settings.textSize) || 18,
       },
     };
     this.objects.push(object);
@@ -371,7 +374,7 @@ export class GeometryDocument {
       y: Number(position.y),
       style: {
         color: settings.lineColor || "#334155",
-        fontSize: Number(settings.textSize) || 16,
+        fontSize: Number(settings.textFontSize ?? settings.textSize) || 16,
       },
     };
     if (!this.getMeasurementText(object)) return null;
@@ -387,7 +390,7 @@ export class GeometryDocument {
       id: this.#id(), type: "parameter", name: identifier, value: numericValue,
       unit: ["distance", "angle"].includes(unit) ? unit : "none",
       x: Number(position.x), y: Number(position.y),
-      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textSize) || 16 },
+      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textFontSize ?? settings.textSize) || 16 },
     };
     this.objects.push(object);
     return object;
@@ -413,7 +416,7 @@ export class GeometryDocument {
     const object = {
       id: this.#id(), type: "calculation", name: identifier, expression: source,
       variables: normalizedVariables, x: Number(position.x), y: Number(position.y),
-      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textSize) || 16 },
+      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textFontSize ?? settings.textSize) || 16 },
     };
     if (this.getNumericValue(object) === null) return null;
     this.objects.push(object);
@@ -663,7 +666,7 @@ export class GeometryDocument {
     const object = {
       id: this.#id(), type: "table", sourceIds: sources, rows: [],
       x: Number(position.x), y: Number(position.y),
-      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textSize) || 14 },
+      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textFontSize ?? settings.textSize) || 14 },
     };
     this.objects.push(object);
     this.addTableRow(object.id);
@@ -688,7 +691,7 @@ export class GeometryDocument {
       id: this.#id(), type: "actionButton", actionKind, targetIds: targets,
       label: String(label || ({ hide: "隐藏", show: "显示", animate: "动画" }[actionKind])).trim().slice(0, 40),
       x: Number(position.x), y: Number(position.y),
-      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textSize) || 15 },
+      style: { color: settings.lineColor || "#334155", fontSize: Number(settings.textFontSize ?? settings.textSize) || 15 },
       ...(url ? { url } : {}),
       ...(actionKind === "sound" ? {
         frequency: Math.max(80, Math.min(2000, Number(options.frequency) || 440)),
@@ -745,6 +748,9 @@ export class GeometryDocument {
     if (object.type === "threePointCircle") {
       return `过 ${pointLabel(object.pointAId)}、${pointLabel(object.pointBId)}、${pointLabel(object.pointCId)} 三点的圆`;
     }
+    if (object.type === "incircle") {
+      return `△${pointLabel(object.pointAId)}${pointLabel(object.pointBId)}${pointLabel(object.pointCId)} 的内切圆`;
+    }
     if (object.type === "arc") return `弧 ${pair(object.startPointId, object.endPointId)}`;
     if (object.type === "threePointArc") {
       return `弧 ${pointLabel(object.pointAId)}${pointLabel(object.pointBId)}${pointLabel(object.pointCId)}`;
@@ -771,12 +777,13 @@ export class GeometryDocument {
     return object.type;
   }
 
-  getMeasurementText(measurementOrId) {
+  getMeasurementText(measurementOrId, decimalPlaces = 2) {
     const object = typeof measurementOrId === "string" ? this.getObject(measurementOrId) : measurementOrId;
     if (object?.type !== "measurement") return null;
     const points = object.parents.map((id) => this.getPointPosition(id));
     const shapes = object.parents.map((id) => this.getShapeGeometry(id));
-    const format = (value) => Number.isFinite(value) ? value.toFixed(2) : null;
+    const decimals = Math.max(0, Math.min(10, Math.round(Number(decimalPlaces) || 0)));
+    const format = (value) => Number.isFinite(value) ? value.toFixed(decimals) : null;
     const parents = object.parents.map((id) => this.getObject(id));
     const pointLabel = (index) => parents[index]?.type === "point" ? parents[index].label : "?";
     if (object.measurementKind === "distance" && points.length === 2 && points.every(Boolean)) {
@@ -903,18 +910,52 @@ export class GeometryDocument {
   }
 
   addIncenter(pointAId, pointBId, pointCId, settings) {
+    return this.#addTriangleCenter("incenter", pointAId, pointBId, pointCId, settings);
+  }
+
+  addCentroid(pointAId, pointBId, pointCId, settings) {
+    return this.#addTriangleCenter("centroid", pointAId, pointBId, pointCId, settings);
+  }
+
+  addOrthocenter(pointAId, pointBId, pointCId, settings) {
+    return this.#addTriangleCenter("orthocenter", pointAId, pointBId, pointCId, settings);
+  }
+
+  #addTriangleCenter(kind, pointAId, pointBId, pointCId, settings) {
     const parents = [pointAId, pointBId, pointCId];
     if (new Set(parents).size !== 3 || parents.some((id) => !this.isPoint(id))) return null;
+    const positions = parents.map((id) => this.getPointPosition(id));
+    const evaluator = kind === "incenter" ? triangleIncenter
+      : kind === "centroid" ? triangleCentroid
+        : kind === "orthocenter" ? triangleOrthocenter : null;
+    if (!evaluator || positions.some((position) => !position) || !evaluator(...positions)) return null;
     const point = {
       id: this.#id(),
       type: "point",
-      definition: { kind: "incenter", parents },
+      definition: { kind, parents },
       label: labelForIndex(this.nextLabel++),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
     this.objects.push(point);
-    return this.getPointPosition(point) ? point : (this.objects.pop(), null);
+    return point;
+  }
+
+  addIncircle(pointAId, pointBId, pointCId, settings) {
+    const ids = [pointAId, pointBId, pointCId];
+    if (new Set(ids).size !== 3 || ids.some((id) => !this.isPoint(id))) return null;
+    const positions = ids.map((id) => this.getPointPosition(id));
+    if (positions.some((position) => !position) || !triangleIncircle(...positions)) return null;
+    const object = {
+      id: this.#id(),
+      type: "incircle",
+      pointAId,
+      pointBId,
+      pointCId,
+      style: defaultShapeStyle(settings),
+    };
+    this.objects.push(object);
+    return object;
   }
 
   addAngleTangentCircleCenter(vertexId, pointAId, pointBId, outerCircleId, settings) {
@@ -957,10 +998,11 @@ export class GeometryDocument {
 
   addPointAt(position, settings, tolerance = 10) {
     const pointHit = this.hitTestPoint(position, tolerance);
-    if (pointHit) return { point: pointHit.object, created: false };
-
     const intersection = this.findNearestIntersection(position, tolerance * 1.5);
-    if (intersection) {
+    const canDisambiguateIntersection = pointHit &&
+      ["intersection", "other-intersection"].includes(pointHit.object.definition?.kind) &&
+      intersection && intersection.distance + EPSILON < pointHit.distance;
+    if (intersection && (!pointHit || canDisambiguateIntersection)) {
       const point = this.addIntersectionPoint(
         intersection.parents[0],
         intersection.parents[1],
@@ -969,6 +1011,7 @@ export class GeometryDocument {
       );
       return { point, created: true, snappedToIntersection: true };
     }
+    if (pointHit) return { point: pointHit.object, created: false };
 
     const shapeHit = this.hitTestShape(position, tolerance);
     const point = shapeHit
@@ -1186,6 +1229,19 @@ export class GeometryDocument {
     };
     this.objects.push(object);
     return object;
+  }
+
+  addAngleBisectorFromSides(sideAId, sideBId, settings) {
+    const sides = [this.getObject(sideAId), this.getObject(sideBId)];
+    const supportedTypes = new Set(["segment", "line", "ray"]);
+    if (sideAId === sideBId || sides.some((side) => !supportedTypes.has(side?.type))) return null;
+    const endpoints = sides.map((side) => [side.pointAId, side.pointBId].filter(Boolean));
+    const common = endpoints[0].filter((id) => endpoints[1].includes(id));
+    if (common.length !== 1) return null;
+    const vertexId = common[0];
+    const pointAId = endpoints[0].find((id) => id !== vertexId);
+    const pointBId = endpoints[1].find((id) => id !== vertexId);
+    return this.addAngleBisector(vertexId, pointAId, pointBId, settings);
   }
 
   addAngleMarkFromSides(vertexId, sideAId, directionA, sideBId, directionB, settings, options = {}) {
@@ -1596,9 +1652,11 @@ export class GeometryDocument {
       if (points.length !== 3 || points.some((item) => !item)) return null;
       return circumcircleFromPoints(...points)?.center || null;
     }
-    if (definition.kind === "incenter") {
+    if (["incenter", "centroid", "orthocenter"].includes(definition.kind)) {
       const points = definition.parents.map((id) => this.getPointPosition(id, nextStack));
       if (points.length !== 3 || points.some((item) => !item)) return null;
+      if (definition.kind === "centroid") return triangleCentroid(...points);
+      if (definition.kind === "orthocenter") return triangleOrthocenter(...points);
       return triangleIncenter(...points);
     }
     if (definition.kind === "angle-circle-center") {
@@ -2093,6 +2151,14 @@ export class GeometryDocument {
       return !circle || circle.radius <= EPSILON ? null : { kind: "circle", ...circle };
     }
 
+    if (shape.type === "incircle") {
+      const points = [shape.pointAId, shape.pointBId, shape.pointCId]
+        .map((id) => this.getPointPosition(id, nextStack));
+      if (points.some((point) => !point)) return null;
+      const circle = triangleIncircle(...points);
+      return circle ? { kind: "circle", ...circle } : null;
+    }
+
     if (shape.type === "radiusCircle") {
       const center = this.getPointPosition(shape.centerId, nextStack);
       const radiusSegment = this.getShapeGeometry(shape.radiusSegmentId, nextStack);
@@ -2437,22 +2503,26 @@ export class GeometryDocument {
       (paintIndex.get(b.object.id) || 0) - (paintIndex.get(a.object.id) || 0));
   }
 
-  findNearestIntersection(position, tolerance = 15) {
+  findNearbyIntersections(position, tolerance = 15) {
     const nearby = this.hitTestShapes(position, tolerance);
-    let best = null;
+    const candidates = [];
     for (let firstIndex = 0; firstIndex < nearby.length; firstIndex += 1) {
       for (let secondIndex = firstIndex + 1; secondIndex < nearby.length; secondIndex += 1) {
         const parents = [nearby[firstIndex].object.id, nearby[secondIndex].object.id];
         const intersections = this.getIntersections(parents[0], parents[1]);
         intersections.forEach((intersection, branch) => {
           const hitDistance = distance(position, intersection);
-          if (hitDistance <= tolerance && (!best || hitDistance < best.distance)) {
-            best = { parents, branch, position: intersection, distance: hitDistance };
-          }
+          if (hitDistance <= tolerance) candidates.push({
+            parents, branch, position: intersection, distance: hitDistance,
+          });
         });
       }
     }
-    return best;
+    return candidates.sort((first, second) => first.distance - second.distance || first.branch - second.branch);
+  }
+
+  findNearestIntersection(position, tolerance = 15) {
+    return this.findNearbyIntersections(position, tolerance)[0] || null;
   }
 
   objectsInRect(rectangle) {
@@ -2535,6 +2605,8 @@ export class GeometryDocument {
       if (object.definition.kind === "midpoint") return [...object.definition.parents];
       if (object.definition.kind === "circumcenter") return [...object.definition.parents];
       if (object.definition.kind === "incenter") return [...object.definition.parents];
+      if (object.definition.kind === "centroid") return [...object.definition.parents];
+      if (object.definition.kind === "orthocenter") return [...object.definition.parents];
       if (object.definition.kind === "angle-circle-center") {
         return [
           object.definition.vertexId,
@@ -2579,6 +2651,7 @@ export class GeometryDocument {
     if (object.type === "threePointCircle") {
       return [object.pointAId, object.pointBId, object.pointCId, object.centerPointId].filter(Boolean);
     }
+    if (object.type === "incircle") return [object.pointAId, object.pointBId, object.pointCId];
     if (["segment", "line", "ray", "perpendicularBisector"].includes(object.type)) {
       return [object.pointAId, object.pointBId];
     }
@@ -2621,7 +2694,7 @@ export class GeometryDocument {
         : TEXT_TYPES.has(object.type) ? {
         ...object.style,
         color: settings.lineColor || object.style?.color || "#334155",
-        fontSize: Number(object.style?.fontSize) || Number(settings.textSize) || 16,
+        fontSize: Number(object.style?.fontSize) || Number(settings.textFontSize ?? settings.textSize) || 16,
       }
         : defaultShapeStyle(settings);
     return true;

@@ -31,3 +31,25 @@ export function pointLinePairs(selection, isLineObject) {
   if (!points.length || !lines.length) return [];
   return points.flatMap((point) => lines.map((line) => ({ point, line })));
 }
+
+export function angleBisectorFromCommonEndpoint(selection) {
+  if (!Array.isArray(selection) || selection.length !== 2) return null;
+  const [first, second] = selection;
+  const supportedTypes = new Set(["segment", "line", "ray"]);
+  if (!supportedTypes.has(first?.type) || !supportedTypes.has(second?.type) || first.id === second.id) return null;
+  const firstEndpoints = [first.pointAId, first.pointBId].filter(Boolean);
+  const secondEndpoints = [second.pointAId, second.pointBId].filter(Boolean);
+  const common = firstEndpoints.filter((id) => secondEndpoints.includes(id));
+  if (common.length !== 1) return null;
+  const vertexId = common[0];
+  const pointAId = firstEndpoints.find((id) => id !== vertexId);
+  const pointBId = secondEndpoints.find((id) => id !== vertexId);
+  if (!pointAId || !pointBId || pointAId === pointBId) return null;
+  return {
+    vertexId,
+    pointAId,
+    pointBId,
+    sideAId: first.id,
+    sideBId: second.id,
+  };
+}

@@ -7,6 +7,6 @@
     "scripts":  {
                     "build:standalone":  "node build-standalone.mjs",
                     "start":  "node server.mjs",
-                    "test":  "node build-standalone.mjs && node --test tests/geometry.test.js"
+                    "test":  "node build-standalone.mjs && node --test tests/geometry.test.js tests/preferences.test.js"
                 }
 }

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (relativePath) => readFile(path.join(root, relativePath), "utf8");
 
-const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, latex, app] = await Promise.all([
+const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, textFormat, latex, preferences, help, shell, app] = await Promise.all([
   read("index.html"),
   read("styles.css"),
   read("src/core/geometry.js"),
@@ -14,7 +14,11 @@ const [htmlSource, styles, geometry, expression, documentModel, history, view, s
   read("src/core/history.js"),
   read("src/core/view.js"),
   read("src/core/selection.js"),
+  read("src/core/text-format.js"),
   read("src/core/latex.js"),
+  read("src/core/preferences.js"),
+  read("src/core/help.js"),
+  read("src/ui/shell.js"),
   read("src/app.js"),
 ]);
 
@@ -25,7 +29,11 @@ const moduleSources = JSON.stringify({
   history,
   view,
   selection,
+  textFormat,
   latex,
+  preferences,
+  help,
+  shell,
   app,
 }).replaceAll("<", "\\u003c");
 
@@ -47,16 +55,27 @@ const bootstrap = `    <script>
         const historyUrl = createModule(sources.history.replaceAll("./document.js", documentUrl));
         const viewUrl = createModule(sources.view);
         const selectionUrl = createModule(sources.selection);
-        const latexUrl = createModule(sources.latex.replaceAll("./geometry.js", geometryUrl));
+        const textFormatUrl = createModule(sources.textFormat);
+        const latexUrl = createModule(sources.latex
+          .replaceAll("./geometry.js", geometryUrl)
+          .replaceAll("./text-format.js", textFormatUrl));
+        const preferencesUrl = createModule(sources.preferences);
+        const helpUrl = createModule(sources.help);
+        const shellUrl = createModule(sources.shell
+          .replaceAll("../core/preferences.js", preferencesUrl)
+          .replaceAll("../core/help.js", helpUrl));
         const appUrl = createModule(sources.app
           .replaceAll("./core/document.js", documentUrl)
           .replaceAll("./core/history.js", historyUrl)
           .replaceAll("./core/geometry.js", geometryUrl)
           .replaceAll("./core/view.js", viewUrl)
           .replaceAll("./core/selection.js", selectionUrl)
+          .replaceAll("./core/preferences.js", preferencesUrl)
+          .replaceAll("./core/text-format.js", textFormatUrl)
           .replaceAll("./core/latex.js", latexUrl));
 
-        import(appUrl)
+        import(shellUrl)
+          .then(() => import(appUrl))
           .catch((error) => {
             console.error("SketchpadNext failed to start.", error);
             const notice = document.createElement("div");

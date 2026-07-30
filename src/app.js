@@ -2,11 +2,22 @@ import { GeometryDocument } from "./core/document.js";
 import { DocumentHistory } from "./core/history.js";
 import { clipLineGeometryToView } from "./core/geometry.js";
 import { clientPointToWorld, fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "./core/view.js";
-import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "./core/selection.js";
+import {
+  angleBisectorFromCommonEndpoint,
+  hasExceededDragThreshold,
+  pointLinePairs,
+  selectionDragIntent,
+} from "./core/selection.js";
 import { createTikzExport } from "./core/latex.js";
+import {
+  PREFERENCES_CHANGE_EVENT,
+  loadPreferences,
+  normalizePreferences,
+  savePreferences,
+} from "./core/preferences.js";
+import { parseMathText } from "./core/text-format.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const SETTINGS_KEY = "sketchpad-next.settings.v1";
 const AUTOSAVE_KEY = "sketchpad-next.autosave.v1";
 const CUSTOM_TOOLS_KEY = "sketchpad-next.custom-tools.v1";
 const FILE_HANDLE_DB = "sketchpad-next.files.v1";
@@ -75,17 +86,6 @@ async function restoreProjectHandle() {
   }
 }
 
-const defaultSettings = {
-  pointSize: 6,
-  pointColor: "#2563eb",
-  lineWidth: 2,
-  lineColor: "#334155",
-  lineDash: "solid",
-  showLabels: true,
-  snapToGrid: false,
-  gridSize: 20,
-};
-
 const toolDescriptions = {
   select: "单击交叉附近创建动态交点；拖动对象移动，空白处拖框多选",
   point: "点击空白处创建自由点；点击线或圆创建约束点",
@@ -93,10 +93,10 @@ const toolDescriptions = {
   line: "依次选择两个点创建无限直线",
   ray: "先选射线端点，再选方向点",
   midpoint: "选择一条线段，或依次选择两个点创建动态中点",
-  perpendicularBisector: "选择一条线段，或依次选择两个点创建中垂线",
+  perpendicularBisector: "选择一条线段，或依次选择/直接点出两个点创建中垂线",
   parallel: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
   perpendicular: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
-  angleBisector: "按角的书写顺序选择：第一边上的点、顶点、第二边上的点",
+  angleBisector: "可先选两条共顶点边，或依次选择/点出：第一边点、顶点、第二边点",
   marker: "在角的顶点按下并向角内拖动；点击已有灰色标识可切换 1～4 道弧线",
   info: "点击对象查看类型、父对象和子对象；按住 Shift 可让信息保持显示",
   text: "点击空白处输入文本；拖动文本调整位置，双击文本可再次编辑",
@@ -105,7 +105,7 @@ const toolDescriptions = {
 };
 
 const elements = Object.fromEntries([
-  "geometryCanvas", "traceLayer", "objectLayer", "previewLayer", "emptyState", "toast", "infoPanel",
+  "geometryCanvas", "snapGridLayer", "traceLayer", "objectLayer", "previewLayer", "emptyState", "toast", "infoPanel",
   "documentTitle", "saveState", "newButton", "openButton", "saveButton", "saveAsButton", "copyLatexButton", "insertImageButton", "showHiddenButton", "fileInput", "imageInput",
   "pageSelect", "addPageButton", "renamePageButton", "deletePageButton",
   "undoButton", "redoButton", "constructionMenu", "measurementMenu", "transformMenu", "dataMenu", "displayMenu", "deleteButton", "resetViewButton", "snapToggle", "toolHint",
@@ -151,6 +151,8 @@ let pathMarkDragState = null;
 let constructionDragState = null;
 let styleEditSnapshot = null;
 let pointNameEditSnapshot = null;
+let pointNameEditPointId = null;
+let pointNameEditOriginalLabel = "";
 let angleMarkSizeEditSnapshot = null;
 let pointerWorld = { x: 0, y: 0 };
 let view = { x: 0, y: 0, width: 1200, height: 720 };
@@ -204,11 +206,7 @@ function confirmUser(message, options = {}) {
 }
 
 function loadSettings() {
-  try {
-    return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
-  } catch {
-    return { ...defaultSettings };
-  }
+  return loadPreferences();
 }
 
 function loadCustomTools() {
@@ -246,7 +244,7 @@ function loadAutosaveProject() {
 }
 
 function saveSettings() {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  settings = savePreferences(settings);
   syncSettingsControls();
 }
 
@@ -395,8 +393,57 @@ function createSvgElement(name, attributes = {}) {
   return element;
 }
 
+function appendFormattedText(element, value, options = {}) {
+  const segments = parseMathText(value, options);
+  for (const segment of segments) {
+    const attributes = segment.script === "normal" ? {} : {
+      "baseline-shift": segment.script,
+      "font-size": "70%",
+    };
+    const span = createSvgElement("tspan", attributes);
+    span.textContent = segment.text;
+    element.append(span);
+  }
+  if (!segments.length) element.textContent = " ";
+}
+
 function clearLayer(layer) {
   while (layer.firstChild) layer.removeChild(layer.firstChild);
+}
+
+function renderSnapGrid() {
+  clearLayer(elements.snapGridLayer);
+  if (!settings.snapToGrid) return;
+  const baseSpacing = Math.max(5, Number(settings.gridSize) || 20);
+  const rect = elements.geometryCanvas.getBoundingClientRect();
+  const pixelsPerWorldUnit = rect.width > 0 ? rect.width / view.width : 1;
+  let spacing = baseSpacing;
+  while (spacing * pixelsPerWorldUnit < 12) spacing *= 2;
+  const startX = Math.ceil(view.x / spacing) * spacing;
+  const endX = view.x + view.width;
+  const startY = Math.ceil(view.y / spacing) * spacing;
+  const endY = view.y + view.height;
+  const fragment = document.createDocumentFragment();
+  const isMajor = (value) => Math.abs(Math.round(value / baseSpacing)) % 5 === 0;
+  for (let x = startX; x <= endX + spacing * 0.01; x += spacing) {
+    fragment.append(createSvgElement("line", {
+      x1: x,
+      y1: view.y,
+      x2: x,
+      y2: endY,
+      class: `snap-grid-line${isMajor(x) ? " major" : ""}`,
+    }));
+  }
+  for (let y = startY; y <= endY + spacing * 0.01; y += spacing) {
+    fragment.append(createSvgElement("line", {
+      x1: view.x,
+      y1: y,
+      x2: endX,
+      y2: y,
+      class: `snap-grid-line${isMajor(y) ? " major" : ""}`,
+    }));
+  }
+  elements.snapGridLayer.append(fragment);
 }
 
 function scheduleRender() {
@@ -656,16 +703,10 @@ function renderPoint(object, layer = elements.objectLayer) {
       x: position.x + offset.x,
       y: position.y + offset.y,
       class: "point-label",
+      "font-size": Number(object.style?.labelFontSize) || Number(settings.pointLabelFontSize) || 17,
       "data-label-for": object.id,
     });
-    const subscriptMatch = String(object.label).match(/^(.*)\[([^\]]+)\]$/);
-    if (subscriptMatch) {
-      const base = createSvgElement("tspan");
-      base.textContent = subscriptMatch[1];
-      const subscript = createSvgElement("tspan", { "baseline-shift": "sub", "font-size": "70%" });
-      subscript.textContent = subscriptMatch[2];
-      label.append(base, subscript);
-    } else label.textContent = object.label;
+    appendFormattedText(label, object.label, { legacyBracketSubscript: true });
     layer.append(label);
   }
 }
@@ -680,7 +721,8 @@ function renderText(object, layer = elements.objectLayer) {
     "data-object-id": object.id,
   });
   const table = object.type === "table" ? documentModel.getTableData(object) : null;
-  const content = object.type === "measurement" ? documentModel.getMeasurementText(object) || "无效度量"
+  const content = object.type === "measurement"
+    ? documentModel.getMeasurementText(object, settings.measurementDecimals) || "无效度量"
     : ["parameter", "calculation"].includes(object.type) ? documentModel.getValueText(object) || "无效数值"
       : table ? [table.headers.join("    "), ...table.rows.map((row) => row.join("    "))].join("\n")
         : object.type === "actionButton" ? object.label : object.content;
@@ -696,7 +738,7 @@ function renderText(object, layer = elements.objectLayer) {
   const lines = String(content).split(/\r?\n/);
   lines.forEach((line, index) => {
     const tspan = createSvgElement("tspan", { x: object.x, dy: index === 0 ? 0 : "1.35em" });
-    tspan.textContent = line || " ";
+    appendFormattedText(tspan, line || " ", { enableScripts: true });
     text.append(tspan);
   });
   layer.append(text);
@@ -796,6 +838,7 @@ function render() {
     cancelAnimationFrame(pendingRenderFrame);
     pendingRenderFrame = null;
   }
+  renderSnapGrid();
   renderTraces();
   clearLayer(elements.objectLayer);
   for (const object of documentModel.objectsInPaintOrder()) {
@@ -851,7 +894,9 @@ function toolName(tool) {
 function objectDescription(object) {
   if (object.type === "point") return `点 ${object.label}`;
   if (object.type === "text") return `文本“${object.content.slice(0, 12)}”`;
-  if (object.type === "measurement") return documentModel.getMeasurementText(object) || "度量值";
+  if (object.type === "measurement") {
+    return documentModel.getMeasurementText(object, settings.measurementDecimals) || "度量值";
+  }
   if (object.type === "parameter") return `参数 ${object.name}`;
   if (object.type === "calculation") return `计算 ${object.name}`;
   if (object.type === "table") return "数据表格";
@@ -863,7 +908,7 @@ function objectDescription(object) {
     angleBisector: "角平分线", angleMark: "角标记", pathMark: "路径标识", doodle: "手绘标识",
     arc: "圆弧", threePointArc: "圆弧", circleInterior: "圆内部", sectorInterior: "扇形内部", segmentInterior: "弓形内部",
     coordinateSystem: "坐标系", functionGraph: "函数图像", parametricPlot: "参数曲线", locus: "轨迹", transformedShape: "变换像",
-    circle: "圆", radiusCircle: "圆", threePointCircle: "过三点圆",
+    circle: "圆", radiusCircle: "圆", threePointCircle: "过三点圆", incircle: "三角形内切圆",
   }[object.type] || "对象";
 }
 
@@ -913,6 +958,8 @@ function activateTool(tool) {
   const restored = cancelIncompleteConstruction();
   if (restored) afterDocumentChange();
   if (["parallel", "perpendicular"].includes(tool) && constructDerivedLinesFromSelection(tool)) return;
+  if (tool === "perpendicularBisector" && constructPerpendicularBisectorsFromSelection()) return;
+  if (tool === "angleBisector" && constructAngleBisectorFromSelection()) return;
   setTool(tool);
 }
 
@@ -965,54 +1012,83 @@ function handleConstructionClick(position) {
   }
 
   if (currentTool === "midpoint" || currentTool === "perpendicularBisector") {
-    const hit = documentModel.hitTestPoint(position, selectionTolerance()) ||
-      documentModel.hitTest(position, selectionTolerance());
-    if (hit?.object.type === "segment") {
+    const tolerance = selectionTolerance();
+    const pointHit = documentModel.hitTestPoint(position, tolerance);
+    const objectHit = pointHit || documentModel.hitTest(position, tolerance);
+    if (!pendingId && objectHit?.object.type === "segment") {
       mutate(() => {
         const object = currentTool === "midpoint"
-          ? documentModel.addMidpoint(hit.object.pointAId, hit.object.pointBId, settings)
-          : documentModel.addPerpendicularBisector(hit.object.pointAId, hit.object.pointBId, settings);
+          ? documentModel.addMidpoint(objectHit.object.pointAId, objectHit.object.pointBId, settings)
+          : documentModel.addPerpendicularBisector(objectHit.object.pointAId, objectHit.object.pointBId, settings);
         selectOnly(object?.id || null);
         pendingId = null;
       });
       return;
     }
-    if (hit?.object.type !== "point") {
+    let point = pointHit?.object || null;
+    if (!point && currentTool === "perpendicularBisector") {
+      if (!constructionStartSnapshot) constructionStartSnapshot = documentModel.serialize();
+      point = documentModel.addPointAt(position, settings, tolerance).point;
+    }
+    if (point?.type !== "point") {
       showToast(`请选择一条线段，或依次选择两个点创建${currentTool === "midpoint" ? "中点" : "中垂线"}`);
       return;
     }
     if (!pendingId) {
-      pendingId = hit.object.id;
-      selectOnly(hit.object.id);
+      if (currentTool === "perpendicularBisector" && !constructionStartSnapshot) {
+        constructionStartSnapshot = documentModel.serialize();
+      }
+      pendingId = point.id;
+      selectOnly(point.id);
       render();
       return;
     }
-    if (pendingId === hit.object.id) {
+    if (pendingId === point.id) {
       showToast("请选择另一个点");
       return;
     }
-    mutate(() => {
-      const object = currentTool === "midpoint"
-        ? documentModel.addMidpoint(pendingId, hit.object.id, settings)
-        : documentModel.addPerpendicularBisector(pendingId, hit.object.id, settings);
-      selectOnly(object?.id || null);
+    if (currentTool === "midpoint") {
+      mutate(() => {
+        const object = documentModel.addMidpoint(pendingId, point.id, settings);
+        selectOnly(object?.id || null);
+        pendingId = null;
+      });
+    } else {
+      const snapshot = constructionStartSnapshot || documentModel.serialize();
+      const object = documentModel.addPerpendicularBisector(pendingId, point.id, settings);
+      if (!object) {
+        showToast("无法用这两个点创建中垂线");
+        return;
+      }
+      history.recordSnapshot(snapshot);
+      constructionStartSnapshot = null;
       pendingId = null;
-    });
+      selectOnly(object.id);
+      afterDocumentChange();
+    }
     return;
   }
 
   if (["angleBisector", "threePointCircle"].includes(currentTool)) {
-    const hit = documentModel.hitTestPoint(position, selectionTolerance());
-    if (hit?.object.type !== "point") {
-      showToast("请点击已有的点");
+    const tolerance = selectionTolerance();
+    let point = documentModel.hitTestPoint(position, tolerance)?.object || null;
+    if (!point && currentTool === "angleBisector") {
+      if (!constructionStartSnapshot) constructionStartSnapshot = documentModel.serialize();
+      point = documentModel.addPointAt(position, settings, tolerance).point;
+    }
+    if (point?.type !== "point") {
+      showToast(currentTool === "angleBisector" ? "请选择或直接点出一个点" : "请点击已有的点");
       return;
     }
-    if (constructionPointIds.includes(hit.object.id)) {
+    if (constructionPointIds.includes(point.id)) {
       showToast("每一步请选择不同的点");
       return;
     }
-    constructionPointIds.push(hit.object.id);
-    setSelection(constructionPointIds, hit.object.id);
+    if (currentTool === "angleBisector" && !constructionStartSnapshot) {
+      constructionStartSnapshot = documentModel.serialize();
+    }
+    constructionPointIds.push(point.id);
+    setSelection(constructionPointIds, point.id);
     if (constructionPointIds.length < 3) {
       showToast(currentTool === "angleBisector"
         ? (constructionPointIds.length === 1 ? "已选第一边上的点，请选择顶点" : "已选顶点，请选择第二边上的点")
@@ -1021,19 +1097,22 @@ function handleConstructionClick(position) {
       return;
     }
     const [firstId, secondId, thirdId] = constructionPointIds;
-    const snapshot = documentModel.serialize();
+    const snapshot = constructionStartSnapshot || documentModel.serialize();
     const shape = currentTool === "angleBisector"
       ? documentModel.addAngleBisector(secondId, firstId, thirdId, settings)
       : documentModel.addThreePointCircle(firstId, secondId, thirdId, settings);
     constructionPointIds = [];
     if (!shape || !documentModel.getShapeGeometry(shape)) {
-      if (shape) documentModel.removeWithDependents(shape.id);
+      if (constructionStartSnapshot) documentModel = GeometryDocument.fromJSON(constructionStartSnapshot);
+      else if (shape) documentModel.removeWithDependents(shape.id);
+      constructionStartSnapshot = null;
       clearSelection();
       showToast(currentTool === "threePointCircle" ? "三个点不能共线" : "这三个点无法确定夹角");
       render();
       return;
     }
     history.recordSnapshot(snapshot);
+    constructionStartSnapshot = null;
     selectOnly(shape.id);
     afterDocumentChange();
     return;
@@ -1125,12 +1204,11 @@ function selectOrCreateIntersection(position, tolerance, requiredParentId = null
   if (requiredParentId && !nearest.parents.includes(requiredParentId)) return false;
 
   const pointAtIntersection = documentModel.objects.find((object) => {
-    if (object.type !== "point") return false;
-    const pointPosition = documentModel.getPointPosition(object);
-    return pointPosition && Math.hypot(
-      pointPosition.x - nearest.position.x,
-      pointPosition.y - nearest.position.y,
-    ) <= tolerance;
+    if (object.type !== "point" || object.definition?.kind !== "intersection") return false;
+    const parents = object.definition.parents || [];
+    return object.definition.branch === nearest.branch
+      && parents.length === 2
+      && parents.every((id) => nearest.parents.includes(id));
   });
   if (pointAtIntersection) {
     selectOnly(pointAtIntersection.id);
@@ -1150,7 +1228,9 @@ function selectOrCreateIntersection(position, tolerance, requiredParentId = null
 }
 
 async function handleSinglePointerDown(event) {
-  const snapsConstructionPoint = ["point", "segment", "line", "ray", "circle"].includes(currentTool);
+  const snapsConstructionPoint = [
+    "point", "segment", "line", "ray", "circle", "perpendicularBisector", "angleBisector",
+  ].includes(currentTool);
   pointerWorld = clientToWorld(event, snapsConstructionPoint);
   pointerWorld = constrainConstructionPosition(pointerWorld, event);
   try { elements.geometryCanvas.focus({ preventScroll: true }); } catch {}
@@ -1287,8 +1367,11 @@ async function handleSinglePointerDown(event) {
       return;
     }
     const editingActionButton = hit?.object.type === "actionButton" && event.shiftKey;
-    if (!event.shiftKey && documentModel.isShape(hit?.object.id) &&
-      selectOrCreateIntersection(pointerWorld, tolerance, hit.object.id)) return;
+    const hitShape = documentModel.isShape(hit?.object.id);
+    const hitIntersectionPoint = hit?.object.type === "point"
+      && ["intersection", "other-intersection"].includes(hit.object.definition?.kind);
+    if (!event.shiftKey && (hitShape || hitIntersectionPoint) &&
+      selectOrCreateIntersection(pointerWorld, tolerance, hitShape ? hit.object.id : null)) return;
     if (!hit) {
       const baseSelection = event.shiftKey ? new Set(selectedIds) : new Set();
       if (!event.shiftKey) clearSelection();
@@ -1470,7 +1553,7 @@ function handleSinglePointerMove(event) {
       documentModel.setPointLabelOffset(dragState.pointId, {
         x: dragState.originalOffset.x + delta.x,
         y: dragState.originalOffset.y + delta.y,
-      });
+      }, 32);
       dragState.changed = Math.abs(delta.x) > 0.001 || Math.abs(delta.y) > 0.001;
     } else {
       const delta = { x: pointerWorld.x - dragState.last.x, y: pointerWorld.y - dragState.last.y };
@@ -1968,25 +2051,38 @@ function handleWheel(event) {
 
 async function handleDoubleClick(event) {
   if (currentTool !== "select" || event.button !== 0) return;
-  const position = clientToWorld(event);
-  const hit = documentModel.hitTest(position, selectionTolerance());
-  if (!hit || !["text", "parameter"].includes(hit.object.type)) return;
-  event.preventDefault();
-  if (hit.object.type === "parameter") {
-    const value = await askUser(`修改参数 ${hit.object.name}`, String(hit.object.value), { title: "参数" });
-    if (value == null || Number(value) === hit.object.value || !Number.isFinite(Number(value))) return;
-    mutate(() => {
-      documentModel.setParameterValue(hit.object.id, Number(value));
-      selectOnly(hit.object.id);
+  const labelPointId = event.target.closest?.("[data-label-for]")?.dataset.labelFor;
+  if (labelPointId && documentModel.isPoint(labelPointId)) {
+    event.preventDefault();
+    selectOnly(labelPointId);
+    render();
+    requestAnimationFrame(() => {
+      elements.pointName.focus();
+      elements.pointName.select();
     });
     return;
   }
-  const content = await askUser("编辑文本", hit.object.content, { title: "编辑文本", multiline: true });
-  if (content === null || content === hit.object.content) return;
+  const position = clientToWorld(event);
+  const directId = event.target.closest?.("[data-object-id]")?.dataset.objectId;
+  const directObject = directId ? documentModel.getObject(directId) : null;
+  const object = directObject || documentModel.hitTest(position, selectionTolerance())?.object;
+  if (!object || !["text", "parameter"].includes(object.type)) return;
+  event.preventDefault();
+  if (object.type === "parameter") {
+    const value = await askUser(`修改参数 ${object.name}`, String(object.value), { title: "参数" });
+    if (value == null || Number(value) === object.value || !Number.isFinite(Number(value))) return;
+    mutate(() => {
+      documentModel.setParameterValue(object.id, Number(value));
+      selectOnly(object.id);
+    });
+    return;
+  }
+  const content = await askUser("编辑文本", object.content, { title: "编辑文本", multiline: true });
+  if (content === null || content === object.content) return;
   const removedEmptyText = !content.trim();
   mutate(() => {
-    documentModel.updateText(hit.object.id, content);
-    selectOnly(documentModel.getObject(hit.object.id) ? hit.object.id : null);
+    documentModel.updateText(object.id, content);
+    selectOnly(documentModel.getObject(object.id) ? object.id : null);
   });
   if (removedEmptyText) showToast("空文本已删除，可用撤销恢复");
 }
@@ -2348,12 +2444,20 @@ function constructAngleBisectorFromSelection() {
   }
   const sides = selection.filter((object) => ["segment", "line", "ray"].includes(object.type));
   if (sides.length !== 2 || sides.length + points.length !== selection.length) return false;
-  let vertex = points.length === 1 ? points[0] : null;
-  if (!vertex && points.length === 0) {
-    const commonId = [sides[0].pointAId, sides[0].pointBId]
-      .find((id) => id === sides[1].pointAId || id === sides[1].pointBId);
-    vertex = commonId ? documentModel.getObject(commonId) : null;
+  if (points.length === 0) {
+    const definition = angleBisectorFromCommonEndpoint(sides);
+    if (!definition) return false;
+    mutate(() => {
+      const created = documentModel.addAngleBisectorFromSides(
+        definition.sideAId,
+        definition.sideBId,
+        settings,
+      );
+      selectOnly(created?.id || null);
+    });
+    return true;
   }
+  let vertex = points.length === 1 ? points[0] : null;
   if (!vertex) return false;
   const firstPointId = otherDefiningPoint(sides[0], vertex.id);
   const secondPointId = otherDefiningPoint(sides[1], vertex.id);
@@ -2363,6 +2467,24 @@ function constructAngleBisectorFromSelection() {
     selectOnly(created?.id || null);
   });
   return true;
+}
+
+function constructTriangleObjectFromSelection(kind) {
+  const selection = selectedObjects();
+  const points = selection.filter((object) => object.type === "point");
+  if (selection.length !== 3 || points.length !== 3) return false;
+  let created = null;
+  mutate(() => {
+    created = kind === "centroid"
+      ? documentModel.addCentroid(points[0].id, points[1].id, points[2].id, settings)
+      : kind === "incenter"
+        ? documentModel.addIncenter(points[0].id, points[1].id, points[2].id, settings)
+        : kind === "orthocenter"
+          ? documentModel.addOrthocenter(points[0].id, points[1].id, points[2].id, settings)
+          : documentModel.addIncircle(points[0].id, points[1].id, points[2].id, settings);
+    if (created) selectOnly(created.id);
+  });
+  return Boolean(created);
 }
 
 function constructCircleFromSelection(throughThreePoints = false) {
@@ -2466,7 +2588,9 @@ function runConstructionCommand(command) {
         : command === "perpendicularBisector" ? constructPerpendicularBisectorsFromSelection()
           : command === "parallel" || command === "perpendicular" ? constructDerivedLinesFromSelection(command)
             : command === "angleBisector" ? constructAngleBisectorFromSelection()
-              : command === "circle" ? constructCircleFromSelection(false)
+              : ["centroid", "incenter", "orthocenter", "incircle"].includes(command)
+                ? constructTriangleObjectFromSelection(command)
+                : command === "circle" ? constructCircleFromSelection(false)
                 : command === "threePointCircle" ? constructCircleFromSelection(true)
                   : command === "arc" ? constructArcFromSelection(false)
                     : command === "threePointArc" ? constructArcFromSelection(true)
@@ -2479,6 +2603,8 @@ function runConstructionCommand(command) {
       midpoint: "请选择一条或多条线段", intersection: "请选择两个相交的线形或圆形对象",
       perpendicularBisector: "请选择一条或多条线段", parallel: "请至少选择一个点和一条基准线，可同时多选",
       perpendicular: "请至少选择一个点和一条基准线，可同时多选", angleBisector: "请按顺序选择边上点、顶点、边上点",
+      centroid: "请选择三个不共线的三角形顶点", incenter: "请选择三个不共线的三角形顶点",
+      orthocenter: "请选择三个不共线的三角形顶点", incircle: "请选择三个不共线的三角形顶点",
       circle: "请选择圆心与圆上一点，或一个点与一条半径线段", threePointCircle: "请选择三个不共线的点",
       arc: "请选择一个圆以及圆上的两个点", threePointArc: "请选择三个不共线的点",
       circleInterior: "请选择一个或多个圆", sectorInterior: "请选择一条或多条圆弧",
@@ -2847,8 +2973,12 @@ function syncSettingsControls() {
 
 function syncInspectorControls(selection = selectedObjects()) {
   syncSettingsControls();
-  elements.pointName.disabled = true;
-  elements.pointName.value = "";
+  const isEditingSelectedPointName = document.activeElement === elements.pointName
+    && pointNameEditPointId && selection.length === 1 && selection[0].id === pointNameEditPointId;
+  if (!isEditingSelectedPointName) {
+    elements.pointName.disabled = true;
+    elements.pointName.value = "";
+  }
   elements.angleMarkSizeRow.hidden = true;
   elements.angleMarkOpacityRow.hidden = true;
   elements.angleMarkDirectionRow.hidden = true;
@@ -2894,7 +3024,7 @@ function syncInspectorControls(selection = selectedObjects()) {
   const object = selection[0];
   if (object.type === "point") {
     elements.pointName.disabled = false;
-    elements.pointName.value = object.label;
+    if (!isEditingSelectedPointName || pointNameEditPointId !== object.id) elements.pointName.value = object.label;
   } else {
     if (object.type === "angleMark") {
       elements.angleMarkSizeRow.hidden = false;
@@ -3011,6 +3141,7 @@ async function copyCurrentViewLatex() {
     const result = createTikzExport(documentModel, {
       view,
       canvasWidthPx: elements.geometryCanvas.getBoundingClientRect().width,
+      pointLabelFontSize: settings.pointLabelFontSize,
     });
     if (!result.exportedCount) {
       showToast("当前视图没有可导出的可见对象", "warning");
@@ -3324,13 +3455,20 @@ function handleKeyDown(event) {
     } else if (currentTool !== "select") setTool("select");
     return;
   }
+  if (event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (!settings.shortcutsEnabled) return;
+    const shortcut = {
+      v: "select", p: "point", s: "segment", l: "line", y: "ray", m: "midpoint",
+      n: "perpendicularBisector", r: "parallel", t: "perpendicular", b: "angleBisector",
+      k: "marker", i: "info", x: "text", c: "circle", o: "threePointCircle",
+    }[event.key.toLowerCase()];
+    if (shortcut) {
+      event.preventDefault();
+      activateTool(shortcut);
+    }
+    return;
+  }
   if (event.ctrlKey || event.metaKey || event.altKey) return;
-  const shortcut = {
-    v: "select", p: "point", s: "segment", l: "line", y: "ray", m: "midpoint",
-    n: "perpendicularBisector", r: "parallel", t: "perpendicular", b: "angleBisector", k: "marker", i: "info", x: "text",
-    c: "circle", o: "threePointCircle",
-  }[event.key.toLowerCase()];
-  if (shortcut) activateTool(shortcut);
 }
 
 function handleKeyUp(event) {
@@ -3365,6 +3503,11 @@ elements.geometryCanvas.addEventListener("lostpointercapture", handleLostPointer
 elements.geometryCanvas.addEventListener("dblclick", handleDoubleClick);
 elements.geometryCanvas.addEventListener("wheel", handleWheel, { passive: false });
 elements.geometryCanvas.addEventListener("contextmenu", (event) => event.preventDefault());
+window.addEventListener(PREFERENCES_CHANGE_EVENT, (event) => {
+  settings = normalizePreferences(event.detail);
+  syncSettingsControls();
+  render();
+});
 window.addEventListener("keydown", handleKeyDown);
 window.addEventListener("keyup", handleKeyUp);
 window.addEventListener("blur", () => {
@@ -3518,26 +3661,54 @@ for (const control of [elements.pointSize, elements.pointColor, elements.showLab
   control.addEventListener("input", readSettingsControls);
   control.addEventListener("change", readSettingsControls);
 }
+
+function commitPointNameEdit() {
+  const pointId = pointNameEditPointId;
+  const snapshot = pointNameEditSnapshot;
+  const originalLabel = pointNameEditOriginalLabel;
+  pointNameEditPointId = null;
+  pointNameEditSnapshot = null;
+  pointNameEditOriginalLabel = "";
+  if (!pointId) return;
+  const point = documentModel.getObject(pointId);
+  if (!point || point.type !== "point") { render(); return; }
+  const label = elements.pointName.value.trim().slice(0, 12);
+  if (!label) {
+    elements.pointName.value = originalLabel || point.label;
+    showToast("点名称不能为空，已保留原名称", "warning");
+    render();
+    return;
+  }
+  if (label === point.label) { render(); return; }
+  if (!documentModel.renamePoint(point.id, label)) { render(); return; }
+  if (snapshot && snapshot !== documentModel.serialize()) history.recordSnapshot(snapshot);
+  afterDocumentChange();
+}
+
 elements.pointName.addEventListener("focus", () => {
-  if (selectedId && documentModel.getObject(selectedId)?.type === "point") {
+  const point = selectedId ? documentModel.getObject(selectedId) : null;
+  if (point?.type === "point") {
     pointNameEditSnapshot = documentModel.serialize();
+    pointNameEditPointId = point.id;
+    pointNameEditOriginalLabel = point.label;
   }
 });
-elements.pointName.addEventListener("input", () => {
-  const point = selectedId ? documentModel.getObject(selectedId) : null;
-  if (!point || point.type !== "point") return;
-  if (documentModel.renamePoint(point.id, elements.pointName.value)) {
-    autosave();
+elements.pointName.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    elements.pointName.blur();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    elements.pointName.value = pointNameEditOriginalLabel;
+    pointNameEditPointId = null;
+    pointNameEditSnapshot = null;
+    pointNameEditOriginalLabel = "";
+    elements.pointName.blur();
     render();
   }
 });
-elements.pointName.addEventListener("change", () => {
-  if (pointNameEditSnapshot && pointNameEditSnapshot !== documentModel.serialize()) {
-    history.recordSnapshot(pointNameEditSnapshot);
-  }
-  pointNameEditSnapshot = null;
-  render();
-});
+elements.pointName.addEventListener("blur", commitPointNameEdit);
 elements.angleMarkSize.addEventListener("pointerdown", () => {
   if (selectedId && documentModel.getObject(selectedId)?.type === "angleMark") {
     angleMarkSizeEditSnapshot = documentModel.serialize();

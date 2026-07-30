@@ -9,12 +9,22 @@ import {
   lineCircleIntersections,
   lineLineIntersections,
   projectPointToLine,
+  triangleCentroid,
+  triangleIncircle,
+  triangleIncenter,
+  triangleOrthocenter,
 } from "../src/core/geometry.js";
 import { GeometryDocument } from "../src/core/document.js";
 import { DocumentHistory } from "../src/core/history.js";
 import { evaluateExpression, expressionIdentifiers } from "../src/core/expression.js";
 import { createTikzExport, escapeLatexText } from "../src/core/latex.js";
-import { hasExceededDragThreshold, pointLinePairs, selectionDragIntent } from "../src/core/selection.js";
+import {
+  angleBisectorFromCommonEndpoint,
+  hasExceededDragThreshold,
+  pointLinePairs,
+  selectionDragIntent,
+} from "../src/core/selection.js";
+import { parseMathText, plainMathText } from "../src/core/text-format.js";
 import { clientPointToWorld, fitViewToGesture, panViewFromClientDelta, zoomViewAtClientPoint } from "../src/core/view.js";
 
 const settings = {
@@ -370,11 +380,15 @@ test("escapes LaTeX control characters and preserves point subscripts", () => {
   const document = new GeometryDocument();
   document.addFreePoint({ x: 10, y: 10 }, settings, "P[1]");
   document.addText({ x: 15, y: 25 }, "中文 A_1 & 50% # {x} \\", settings);
-  const result = createTikzExport(document, { view: { x: 0, y: 0, width: 100, height: 60 } });
+  const result = createTikzExport(document, {
+    view: { x: 0, y: 0, width: 100, height: 60 },
+    pointLabelFontSize: 34,
+  });
 
   assert.match(result.code, /\\usepackage\[UTF8\]\{ctex\}/);
   assert.ok(result.code.includes("P\\textsubscript{1}"));
-  assert.ok(result.code.includes("中文 A\\_1 \\& 50\\% \\# \\{x\\} \\textbackslash{}"));
+  assert.ok(result.code.includes("中文 A\\textsubscript{1} \\& 50\\% \\# \\{x\\} \\textbackslash{}"));
+  assert.ok(result.code.includes("\\itshape\\fontsize{14pt}{16pt}"));
 });
 
 test("omits hidden, undefined and non-finite objects from TikZ output", () => {
@@ -461,7 +475,7 @@ test("skips one overflowing object without aborting the complete TikZ export", (
 
   assert.ok(result.exportedCount >= 2);
   assert.ok(result.skippedCount >= 1);
-  assert.ok(result.code.includes("SAFE\\_POINT"));
+  assert.ok(result.code.includes("SAFE\\textsubscript{P}OINT"));
   assert.ok(!result.code.includes("OVERFLOW\\_LINE"));
   assert.doesNotMatch(result.code, /NaN|Infinity|null|undefined/);
 });
@@ -474,6 +488,39 @@ test("point labels can be renamed and moved within a bounded area", () => {
   document.setPointLabelOffset(point.id, { x: 200, y: 0 }, 64);
   close(point.labelOffset.x, 64);
   close(point.labelOffset.y, 0);
+});
+
+test("point labels and canvas text support subscripts, superscripts and geometry symbols", () => {
+  assert.deepEqual(parseMathText("A_12^3", { enableScripts: true }), [
+    { text: "A", script: "normal" },
+    { text: "12", script: "sub" },
+    { text: "3", script: "super" },
+  ]);
+  assert.deepEqual(parseMathText("E[2]", { legacyBracketSubscript: true }), [
+    { text: "E", script: "normal" },
+    { text: "2", script: "sub" },
+  ]);
+  assert.deepEqual(parseMathText("x_{n+1}{^2}", { enableScripts: true }), [
+    { text: "x", script: "normal" },
+    { text: "n+1", script: "sub" },
+    { text: "2", script: "super" },
+  ]);
+  assert.equal(
+    plainMathText("\\alpha \\beta \\gamma \\delta \\theta \\pi \\Delta \\angle \\perp \\parallel \\cong \\sim \\neq \\le \\ge \\pm \\times \\cdot \\infty"),
+    "α β γ δ θ π Δ ∠ ⟂ ∥ ≅ ∼ ≠ ≤ ≥ ± × · ∞",
+  );
+  assert.equal(plainMathText("{angle}A{rightangle} {degree} {lte} {gte}"), "∠A∟ ° ≤ ≥");
+  assert.equal(plainMathText("A\\_1"), "A_1");
+});
+
+test("point name editing is deferred until blur and label dragging uses the tighter bound", () => {
+  const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(appSource, /function loadSettings\(\) \{\s*return loadPreferences\(\);/);
+  assert.match(appSource, /setPointLabelOffset\([\s\S]*?}, 32\);/);
+  assert.match(appSource, /pointName\.addEventListener\("blur", commitPointNameEdit\)/);
+  assert.ok(appSource.includes("if (event.isComposing || event.keyCode === 229) return;"));
+  assert.ok(appSource.includes('appendFormattedText(tspan, line || " ", { enableScripts: true });'));
+  assert.doesNotMatch(appSource, /pointName\.addEventListener\("input"[\s\S]{0,300}renamePoint/);
 });
 
 test("new line objects inherit the selected dash style", () => {
@@ -1320,4 +1367,112 @@ test("embedded images can be selected, moved, copied and serialized", () => {
   assert.deepEqual({ x: copy.x, y: copy.y }, { x: 35, y: 46 });
   const restored = GeometryDocument.fromJSON(document.serialize());
   assert.equal(restored.getObject(image.id).dataUrl, "data:image/png;base64,AA==");
+});
+
+test("triangle center primitives reject degeneracy and compute classical centers", () => {
+  const a = { x: 0, y: 0 };
+  const b = { x: 6, y: 0 };
+  const c = { x: 0, y: 8 };
+  assert.deepEqual(triangleCentroid(a, b, c), { x: 2, y: 8 / 3 });
+  assert.deepEqual(triangleOrthocenter(a, b, c), a);
+  assert.deepEqual(triangleIncenter(a, b, c), { x: 2, y: 2 });
+  assert.deepEqual(triangleIncircle(a, b, c), { center: { x: 2, y: 2 }, radius: 2 });
+
+  const collinear = [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 5, y: 0 }];
+  for (const constructor of [triangleCentroid, triangleOrthocenter, triangleIncenter, triangleIncircle]) {
+    assert.equal(constructor(...collinear), null);
+  }
+});
+
+test("triangle centers and incircle remain dynamic and serializable", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const b = document.addFreePoint({ x: 6, y: 0 }, settings);
+  const c = document.addFreePoint({ x: 0, y: 8 }, settings);
+  const incenter = document.addIncenter(a.id, b.id, c.id, settings);
+  const centroid = document.addCentroid(a.id, b.id, c.id, settings);
+  const orthocenter = document.addOrthocenter(a.id, b.id, c.id, settings);
+  const incircle = document.addIncircle(a.id, b.id, c.id, settings);
+
+  assert.deepEqual(document.getPointPosition(incenter), { x: 2, y: 2 });
+  assert.deepEqual(document.getPointPosition(centroid), { x: 2, y: 8 / 3 });
+  assert.deepEqual(document.getPointPosition(orthocenter), { x: 0, y: 0 });
+  assert.deepEqual(document.getShapeGeometry(incircle), {
+    kind: "circle", center: { x: 2, y: 2 }, radius: 2,
+  });
+  assert.deepEqual(document.dependenciesOf(incircle), [a.id, b.id, c.id]);
+  assert.equal(document.getObjectName(incircle), "△ABC 的内切圆");
+
+  document.movePoint(c.id, { x: 0, y: 6 });
+  assert.deepEqual(document.getPointPosition(centroid), { x: 2, y: 2 });
+  assert.ok(document.getShapeGeometry(incircle).radius < 2);
+  const restored = GeometryDocument.fromJSON(document.serialize());
+  assert.deepEqual(restored.getPointPosition(centroid.id), { x: 2, y: 2 });
+  assert.ok(restored.getShapeGeometry(incircle.id).radius > 0);
+
+  const degenerate = new GeometryDocument();
+  const points = [0, 2, 5].map((x) => degenerate.addFreePoint({ x, y: 0 }, settings));
+  assert.equal(degenerate.addIncenter(...points.map((point) => point.id), settings), null);
+  assert.equal(degenerate.addCentroid(...points.map((point) => point.id), settings), null);
+  assert.equal(degenerate.addOrthocenter(...points.map((point) => point.id), settings), null);
+  assert.equal(degenerate.addIncircle(...points.map((point) => point.id), settings), null);
+  assert.equal(degenerate.nextLabel, 3);
+});
+
+test("two selected edges with one common endpoint define an angle bisector", () => {
+  const document = new GeometryDocument();
+  const vertex = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const horizontal = document.addFreePoint({ x: 6, y: 0 }, settings);
+  const vertical = document.addFreePoint({ x: 0, y: 6 }, settings);
+  const first = document.addSegment(horizontal.id, vertex.id, settings);
+  const second = document.addSegment(vertical.id, vertex.id, settings);
+  const adapted = angleBisectorFromCommonEndpoint([first, second]);
+  assert.deepEqual(adapted, {
+    vertexId: vertex.id,
+    pointAId: horizontal.id,
+    pointBId: vertical.id,
+    sideAId: first.id,
+    sideBId: second.id,
+  });
+  const bisector = document.addAngleBisectorFromSides(first.id, second.id, settings);
+  const geometry = document.getShapeGeometry(bisector);
+  assert.equal(geometry.ray, true);
+  close(geometry.b.x - geometry.a.x, 1);
+  close(geometry.b.y - geometry.a.y, 1);
+  const duplicateEdge = document.addSegment(vertex.id, horizontal.id, settings);
+  assert.equal(angleBisectorFromCommonEndpoint([first, duplicateEdge]), null);
+});
+
+test("angle and perpendicular bisectors can be built from points created during the tool gesture", () => {
+  const document = new GeometryDocument();
+  const [vertex, horizontal, vertical] = [
+    { x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 30 },
+  ].map((position) => document.addPointAt(position, settings, 1).point);
+  assert.ok([vertex, horizontal, vertical].every((point) => point.definition.kind === "free"));
+  assert.ok(document.addAngleBisector(vertex.id, horizontal.id, vertical.id, settings));
+  assert.ok(document.addPerpendicularBisector(horizontal.id, vertical.id, settings));
+});
+
+test("nearby intersection branches can both be created despite point hit tolerance", () => {
+  const document = new GeometryDocument();
+  const centerA = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const throughA = document.addFreePoint({ x: -100, y: 0 }, settings);
+  const centerB = document.addFreePoint({ x: 199.99, y: 0 }, settings);
+  const throughB = document.addFreePoint({ x: 299.99, y: 0 }, settings);
+  const firstCircle = document.addCircle(centerA.id, throughA.id, settings);
+  const secondCircle = document.addCircle(centerB.id, throughB.id, settings);
+  const intersections = document.getIntersections(firstCircle.id, secondCircle.id)
+    .sort((first, second) => first.y - second.y);
+  assert.equal(intersections.length, 2);
+  assert.ok(intersections[1].y - intersections[0].y < 3);
+  assert.equal(document.findNearbyIntersections({ x: intersections[0].x, y: 0 }, 2).length, 2);
+
+  const lower = document.addPointAt(intersections[0], settings, 1);
+  assert.equal(lower.snappedToIntersection, true);
+  const upper = document.addPointAt(intersections[1], settings, 1);
+  assert.equal(upper.snappedToIntersection, true);
+  assert.notEqual(upper.point.id, lower.point.id);
+  assert.notEqual(upper.point.definition.branch, lower.point.definition.branch);
+  close(document.getPointPosition(lower.point).y, intersections[0].y);
+  close(document.getPointPosition(upper.point).y, intersections[1].y);
 });

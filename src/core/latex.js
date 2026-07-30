@@ -1,4 +1,5 @@
 import { clipParametricLineToRect } from "./geometry.js";
+import { parseMathText, plainMathText } from "./text-format.js";
 
 const EPSILON = 1e-9;
 const MAX_COORDINATE_FACTOR = 20;
@@ -53,11 +54,18 @@ export function escapeLatexText(value) {
   return Array.from(String(value ?? "")).map((character) => replacements[character] || character).join("");
 }
 
+function formattedTextLatex(value, options = {}) {
+  return parseMathText(value, options).map((segment) => {
+    const escaped = escapeLatexText(segment.text);
+    if (segment.script === "sub") return "\\textsubscript{" + escaped + "}";
+    if (segment.script === "super") return "\\textsuperscript{" + escaped + "}";
+    return escaped;
+  }).join("");
+}
+
 function pointLabelLatex(value) {
   const source = String(value ?? "").replace(/[\r\n]+/g, " ");
-  const subscript = source.match(/^(.*)\[([^\]]+)\]$/);
-  if (!subscript) return escapeLatexText(source);
-  return escapeLatexText(subscript[1]) + "\\textsubscript{" + escapeLatexText(subscript[2]) + "}";
+  return formattedTextLatex(source, { legacyBracketSubscript: true });
 }
 
 function clipSegmentToRect(a, b, rect) {
@@ -140,6 +148,10 @@ export function createTikzExport(documentModel, options = {}) {
     ? Number(options.canvasWidthPx)
     : viewport.width;
   const cssScalePt = targetWidthCm * 28.4527 / canvasWidthPx;
+  const defaultPointLabelFontSize = Math.max(
+    8,
+    Math.min(48, Number(options.pointLabelFontSize) || 17),
+  );
   const targetHeightCm = viewport.height * scale;
   if (!Number.isFinite(targetHeightCm) || targetHeightCm > 500) {
     throw new RangeError("当前视图比例过大，无法安全生成 TikZ");
@@ -453,7 +465,7 @@ export function createTikzExport(documentModel, options = {}) {
           warnings.push("点 " + object.id + " 的位置无效或超出安全范围");
           continue;
         }
-        const color = colorFor(object.style?.color, "#2563eb");
+        const color = colorFor(object.style?.color, "#000000");
         const radius = Math.max(0.025, Math.min(0.3, (Number(object.style?.radius) || 6) * scale));
         const pointOptions = [
           "draw=white",
@@ -464,13 +476,20 @@ export function createTikzExport(documentModel, options = {}) {
           + " circle[radius=" + formatNumber(radius) + "cm];");
         if (object.style?.showLabel !== false && object.label != null) {
           const rawLabel = String(object.label).replace(/[\r\n]+/g, " ");
-          hasUnicodeText ||= /[^\x00-\x7f]/.test(rawLabel);
+          hasUnicodeText ||= /[^\x00-\x7f]/.test(plainMathText(rawLabel, { legacyBracketSubscript: true }));
           const offset = object.labelOffset || { x: 12, y: -12 };
           const labelPosition = { x: position.x + Number(offset.x || 0), y: position.y + Number(offset.y || 0) };
           if (isSafePoint(labelPosition)) {
             const labelColor = colorFor("#273142");
+            const labelFontSize = Math.max(
+              8,
+              Math.min(48, Number(object.style?.labelFontSize) || defaultPointLabelFontSize),
+            );
+            const labelFontSizePt = formatNumber(7 * labelFontSize / 17, 2);
+            const labelLineHeightPt = formatNumber(Number(labelFontSizePt) * 8 / 7, 2);
             commands.push("\\node[anchor=base west,inner sep=0pt,text=" + labelColor
-              + ",font=\\itshape\\fontsize{7pt}{8pt}\\selectfont] at " + coordinate(labelPosition)
+              + ",font=\\itshape\\fontsize{" + labelFontSizePt + "pt}{" + labelLineHeightPt
+              + "pt}\\selectfont] at " + coordinate(labelPosition)
               + " {" + pointLabelLatex(rawLabel) + "};");
           } else {
             warnings.push("点 " + object.id + " 的标签偏移无效，已跳过标签");
@@ -488,7 +507,7 @@ export function createTikzExport(documentModel, options = {}) {
           continue;
         }
         const raw = String(content);
-        hasUnicodeText ||= /[^\x00-\x7f]/.test(raw);
+        hasUnicodeText ||= /[^\x00-\x7f]/.test(plainMathText(raw, { enableScripts: true }));
         const color = colorFor(object.style?.color);
         const fontSize = Number(object.style?.fontSize) || 16;
         const fontSizePt = formatNumber(Math.max(5, Math.min(24, fontSize * scale * 28.4527)), 2);
@@ -498,7 +517,7 @@ export function createTikzExport(documentModel, options = {}) {
           commands.push("\\node[anchor=base west,inner sep=0pt,text=" + color
             + ",font=\\fontsize{" + fontSizePt + "pt}{" + formatNumber(Number(fontSizePt) * 1.2, 2)
             + "pt}\\selectfont] at " + coordinate(linePosition)
-            + " {" + (escapeLatexText(lines[index]) || "\\strut") + "};");
+            + " {" + (formattedTextLatex(lines[index], { enableScripts: true }) || "\\strut") + "};");
         }
         exportedCount += 1;
         continue;

@@ -28,7 +28,19 @@ export function distance(a, b) {
   return length(subtract(a, b));
 }
 
+function isNondegenerateTriangle(a, b, c) {
+  if (![a, b, c].every((point) =>
+    Number.isFinite(point?.x) && Number.isFinite(point?.y))) return false;
+  const ab = subtract(b, a);
+  const ac = subtract(c, a);
+  const bc = subtract(c, b);
+  const scaleFactor = Math.max(length(ab) * length(ac), length(ab) * length(bc), length(ac) * length(bc));
+  return length(ab) > EPSILON && length(ac) > EPSILON && length(bc) > EPSILON &&
+    Math.abs(cross(ab, ac)) > EPSILON * scaleFactor;
+}
+
 export function triangleIncenter(a, b, c) {
+  if (!isNondegenerateTriangle(a, b, c)) return null;
   const sideA = distance(b, c);
   const sideB = distance(c, a);
   const sideC = distance(a, b);
@@ -38,6 +50,38 @@ export function triangleIncenter(a, b, c) {
     x: (sideA * a.x + sideB * b.x + sideC * c.x) / perimeter,
     y: (sideA * a.y + sideB * b.y + sideC * c.y) / perimeter,
   };
+}
+
+export function triangleCentroid(a, b, c) {
+  if (!isNondegenerateTriangle(a, b, c)) return null;
+  return {
+    x: (a.x + b.x + c.x) / 3,
+    y: (a.y + b.y + c.y) / 3,
+  };
+}
+
+export function triangleOrthocenter(a, b, c) {
+  if (!isNondegenerateTriangle(a, b, c)) return null;
+  const sideBC = subtract(c, b);
+  const sideAC = subtract(c, a);
+  const altitudeA = { x: -sideBC.y, y: sideBC.x };
+  const altitudeB = { x: -sideAC.y, y: sideAC.x };
+  return lineLineIntersections(
+    a,
+    add(a, altitudeA),
+    b,
+    add(b, altitudeB),
+  )[0] || null;
+}
+
+export function triangleIncircle(a, b, c) {
+  const center = triangleIncenter(a, b, c);
+  if (!center) return null;
+  const side = subtract(b, a);
+  const sideLength = length(side);
+  if (sideLength <= EPSILON) return null;
+  const radius = Math.abs(cross(side, subtract(center, a))) / sideLength;
+  return radius > EPSILON ? { center, radius } : null;
 }
 
 export function circleTangentToAngleAndCircle(vertex, pointA, pointB, outerCenter, outerRadius) {
