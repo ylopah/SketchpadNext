@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SketchpadNext · 动态几何画板</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="SketchpadNext">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <strong>Sketchpad<span>Next</span></strong>
+            <small>动态几何工作台</small>
+          </div>
+        </div>
+        <div class="document-title">
+          <input id="documentTitle" value="未命名画板" aria-label="画板名称" />
+          <span id="saveState" role="status" aria-live="polite">已保存到本地</span>
+          <div class="page-controls" aria-label="画板页面">
+            <select id="pageSelect" aria-label="当前页面"></select>
+            <button id="addPageButton" type="button" title="新建页面" aria-label="新建页面">＋</button>
+            <button id="renamePageButton" type="button" title="重命名页面">改名</button>
+            <button id="deletePageButton" type="button" title="删除页面" aria-label="删除当前页面">－</button>
+          </div>
+        </div>
+        <nav class="file-actions" aria-label="文件操作">
+          <button id="newButton" class="quiet-button">新建</button>
+          <button id="openButton" class="quiet-button">打开工程</button>
+          <button id="saveButton" class="primary-button" title="首次选择位置，之后直接保存到当前工程 (Ctrl+S)">保存</button>
+          <button id="saveAsButton" class="quiet-button" title="保存为新的可编辑工程 (Ctrl+Shift+S)">另存为</button>
+          <button id="insertImageButton" class="quiet-button">插入图片</button>
+          <button id="showHiddenButton" class="quiet-button" hidden>显示隐藏</button>
+          <input id="fileInput" type="file" accept=".spn,.json,application/x-sketchpadnext+json,application/json" hidden />
+          <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        </nav>
+      </header>
+
+      <main class="workspace">
+        <aside class="toolrail" aria-label="绘图工具">
+          <button class="tool-button active" data-tool="select" title="选择/移动 (V)">
+            <span class="tool-icon pointer-icon">➤</span><span>选择</span>
+          </button>
+          <div class="tool-divider"></div>
+          <button class="tool-button" data-tool="point" title="点 (P)">
+            <span class="tool-icon point-icon">●</span><span>点</span>
+          </button>
+          <button class="tool-button" data-tool="segment" title="线段 (S)">
+            <span class="tool-icon">╱</span><span>线段</span>
+          </button>
+          <button class="tool-button" data-tool="line" title="直线 (L)">
+            <span class="tool-icon">⟋</span><span>直线</span>
+          </button>
+          <button class="tool-button" data-tool="ray" title="射线 (Y)">
+            <span class="tool-icon">↗</span><span>射线</span>
+          </button>
+          <button class="tool-button" data-tool="midpoint" title="中点 (M)">
+            <span class="tool-icon midpoint-icon">◉</span><span>中点</span>
+          </button>
+          <button class="tool-button" data-tool="perpendicularBisector" title="中垂线 (N)">
+            <span class="tool-icon">⌯</span><span>中垂线</span>
+          </button>
+          <button class="tool-button" data-tool="parallel" title="平行线 (R)">
+            <span class="tool-icon">∥</span><span>平行线</span>
+          </button>
+          <button class="tool-button" data-tool="perpendicular" title="垂线 (T)">
+            <span class="tool-icon">⊥</span><span>垂线</span>
+          </button>
+          <button class="tool-button" data-tool="angleBisector" title="角平分线 (B)">
+            <span class="tool-icon">∠</span><span>角平分线</span>
+          </button>
+          <button class="tool-button" data-tool="marker" title="标识笔 (K)">
+            <span class="tool-icon">✎</span><span>标识笔</span>
+          </button>
+          <button class="tool-button" data-tool="info" title="信息工具 (I)">
+            <span class="tool-icon">?</span><span>信息</span>
+          </button>
+          <button class="tool-button" data-tool="text" title="文本工具 (X)">
+            <span class="tool-icon">T</span><span>文本</span>
+          </button>
+          <button class="tool-button" data-tool="circle" title="圆 (C)">
+            <span class="tool-icon circle-icon">○</span><span>圆</span>
+          </button>
+          <button class="tool-button" data-tool="threePointCircle" title="过三点圆 (O)">
+            <span class="tool-icon circle-icon">◌</span><span>过三点圆</span>
+          </button>
+          <div class="tool-divider"></div>
+          <button id="deleteButton" class="tool-button danger-tool" title="删除选中对象 (Delete)">
+            <span class="tool-icon">⌫</span><span>删除</span>
+          </button>
+        </aside>
+
+        <section class="canvas-column">
+          <div class="canvas-toolbar">
+            <div class="history-actions">
+              <button id="undoButton" title="撤销 (Ctrl+Z)" aria-label="撤销" disabled>↶</button>
+              <button id="redoButton" title="重做 (Ctrl+Y)" aria-label="重做" disabled>↷</button>
+              <select id="constructionMenu" class="construction-menu" aria-label="按选择构造">
+                <option value="">构造…</option>
+                <option value="segment">线段</option>
+                <option value="line">直线</option>
+                <option value="ray">射线</option>
+                <option value="midpoint">中点</option>
+                <option value="intersection">交点</option>
+                <option value="perpendicularBisector">中垂线</option>
+                <option value="parallel">平行线</option>
+                <option value="perpendicular">垂线</option>
+                <option value="angleBisector">角平分线</option>
+                <option value="circle">圆</option>
+                <option value="threePointCircle">过三点圆</option>
+                <option value="arc">圆上的弧</option>
+                <option value="threePointArc">过三点的弧</option>
+                <option value="circleInterior">圆内部</option>
+                <option value="sectorInterior">扇形内部</option>
+                <option value="segmentInterior">弓形内部</option>
+                <option value="locus">轨迹</option>
+              </select>
+              <select id="measurementMenu" class="construction-menu" aria-label="度量选中对象">
+                <option value="">度量…</option>
+                <option value="distance">两点距离</option>
+                <option value="length">线段长度</option>
+                <option value="arcLength">弧长</option>
+                <option value="ratio">两线段比值</option>
+                <option value="angle">角度</option>
+                <option value="collinearity">三点共线误差</option>
+                <option value="radius">半径</option>
+                <option value="circumference">圆周长</option>
+                <option value="circleArea">圆面积</option>
+                <option value="coordinates">点坐标</option>
+                <option value="pointValue">路径点参数值</option>
+                <option value="slope">斜率</option>
+              </select>
+              <select id="transformMenu" class="construction-menu" aria-label="变换选中对象">
+                <option value="">变换…</option>
+                <option value="markCenter">标记旋转/缩放中心</option>
+                <option value="markMirror">标记反射镜面</option>
+                <option value="translate">平移</option>
+                <option value="rotate">旋转</option>
+                <option value="scale">缩放</option>
+                <option value="reflect">反射</option>
+                <option value="iterate">重复最近变换…</option>
+              </select>
+              <select id="dataMenu" class="construction-menu" aria-label="参数、计算与绘图">
+                <option value="">数据与绘图…</option>
+                <option value="parameter">新建参数</option>
+                <option value="calculation">新建计算</option>
+                <option value="coordinateSystem">新建坐标系</option>
+                <option value="toggleGrid">显示/隐藏坐标网格</option>
+                <option value="plotPoint">绘制点</option>
+                <option value="functionGraph">绘制函数</option>
+                <option value="inverseGraph">绘制 x=f(y)</option>
+                <option value="polarGraph">绘制极坐标 r=f(θ)</option>
+                <option value="derivative">绘制导函数</option>
+                <option value="parametricPlot">绘制参数曲线</option>
+                <option value="table">生成表格</option>
+                <option value="collectTable">采集表格数据</option>
+                <option value="animate">动画选中参数/路径点</option>
+              </select>
+              <select id="displayMenu" class="construction-menu" aria-label="显示与对象管理">
+                <option value="">显示…</option>
+                <option value="hide">隐藏选中对象</option>
+                <option value="showHidden">显示全部隐藏对象</option>
+                <option value="toggleLabels">显示/隐藏点标签</option>
+                <option value="lock">锁定选中对象</option>
+                <option value="unlock">解除锁定</option>
+                <option value="front">移到最前</option>
+                <option value="back">移到最后</option>
+                <option value="trace">开启/关闭点追踪</option>
+                <option value="clearTrace">清除追踪痕迹</option>
+                <option value="hideButton">创建隐藏按钮</option>
+                <option value="showButton">创建显示按钮</option>
+                <option value="animateButton">创建动画按钮</option>
+                <option value="moveButton">创建移动按钮</option>
+                <option value="linkButton">创建链接按钮</option>
+                <option value="soundButton">创建声音按钮</option>
+                <option value="saveCustomTool">保存为自定义工具</option>
+                <option value="runCustomTool">使用自定义工具</option>
+              </select>
+            </div>
+            <div class="canvas-hint" id="toolHint" role="status" aria-live="polite">拖动点改变图形，滚轮缩放画布</div>
+            <div class="view-actions">
+              <label class="toggle-label"><input id="snapToggle" type="checkbox" /> 吸附</label>
+              <button id="resetViewButton">适应画布</button>
+            </div>
+          </div>
+          <div id="canvasHost" class="canvas-host">
+            <svg id="geometryCanvas" viewBox="0 0 1200 720" preserveAspectRatio="none" role="application" aria-label="动态几何画布" tabindex="0">
+              <defs>
+                <filter id="pointShadow" x="-100%" y="-100%" width="300%" height="300%">
+                  <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.18" />
+                </filter>
+              </defs>
+              <g id="traceLayer"></g>
+              <g id="objectLayer"></g>
+              <g id="previewLayer"></g>
+            </svg>
+            <div id="emptyState" class="empty-state">
+              <div class="empty-illustration" aria-hidden="true">
+                <i class="empty-line"></i><i class="empty-circle"></i><i class="empty-point a"></i><i class="empty-point b"></i>
+              </div>
+              <strong>从一个点开始</strong>
+              <span>选择左侧工具，或按 P 创建点</span>
+            </div>
+            <div id="toast" class="toast" role="status"></div>
+            <div id="infoPanel" class="object-info-panel" role="status" hidden></div>
+          </div>
+          <footer class="statusbar">
+            <span id="statusTool">选择工具</span>
+            <span id="statusSelection">未选择对象</span>
+            <span id="statusCoordinates">x 0.0 · y 0.0</span>
+            <span id="statusCount">0 个对象</span>
+          </footer>
+        </section>
+
+        <aside class="inspector">
+          <div class="inspector-heading">
+            <div>
+              <span class="eyebrow">属性检查器</span>
+              <h2 id="inspectorTitle">新建对象默认值</h2>
+            </div>
+            <span id="selectionBadge" class="selection-badge">全局</span>
+          </div>
+
+          <section class="inspector-section">
+            <h3>点样式</h3>
+            <label class="field-row">
+              <span>点名称</span>
+              <input id="pointName" class="name-input" type="text" maxlength="12" placeholder="先选择一个点" disabled />
+            </label>
+            <label class="field-row">
+              <span>点大小</span>
+              <div class="range-field"><input id="pointSize" type="range" min="3" max="14" step="1" value="6" /><output id="pointSizeValue">6</output></div>
+            </label>
+            <label class="field-row">
+              <span>点颜色</span>
+              <span class="color-field"><input id="pointColor" type="color" value="#2563eb" /><output id="pointColorValue">#2563EB</output></span>
+            </label>
+            <label class="check-row"><input id="showLabels" type="checkbox" checked /><span id="showLabelsText">默认显示点标签</span></label>
+          </section>
+
+          <section class="inspector-section">
+            <h3>线与圆样式</h3>
+            <label class="field-row">
+              <span>线宽</span>
+              <div class="range-field"><input id="lineWidth" type="range" min="1" max="8" step="0.5" value="2" /><output id="lineWidthValue">2</output></div>
+            </label>
+            <label class="field-row">
+              <span>线条颜色</span>
+              <span class="color-field"><input id="lineColor" type="color" value="#334155" /><output id="lineColorValue">#334155</output></span>
+            </label>
+            <label class="field-row">
+              <span>线型</span>
+              <select id="lineDash" class="select-input">
+                <option value="solid">实线</option>
+                <option value="dashed">虚线</option>
+              </select>
+            </label>
+            <label id="angleMarkSizeRow" class="field-row" hidden>
+              <span>标识大小</span>
+              <div class="range-field"><input id="angleMarkSize" type="range" min="10" max="48" step="1" value="24" /><output id="angleMarkSizeValue">24</output></div>
+            </label>
+            <label id="angleMarkOpacityRow" class="field-row" hidden>
+              <span>填充透明度</span>
+              <div class="range-field"><input id="angleMarkOpacity" type="range" min="0" max="0.8" step="0.05" value="0.25" /><output id="angleMarkOpacityValue">0.25</output></div>
+            </label>
+            <label id="angleMarkDirectionRow" class="check-row" hidden>
+              <input id="angleMarkShowDirection" type="checkbox" /><span>显示角的方向箭头</span>
+            </label>
+            <button id="angleMarkReverse" class="wide-button compact-button" type="button" hidden>反向标记另一侧角</button>
+            <label id="pathMarkKindRow" class="field-row" hidden>
+              <span>标识类型</span>
+              <select id="pathMarkKind" class="select-input">
+                <option value="tick">等长刻痕</option>
+                <option value="arrow">平行箭头</option>
+              </select>
+            </label>
+          </section>
+
+          <button id="batchRenameButton" class="wide-button" disabled>批量命名选中的点</button>
+          <button id="applyStyleButton" class="wide-button" disabled>应用到全部选中对象</button>
+
+          <section class="inspector-section compact-section">
+            <h3>画布</h3>
+            <label class="field-row"><span>吸附间距</span><input id="gridSize" class="number-input" type="number" min="5" max="100" step="5" value="20" /></label>
+            <p class="supporting-text">选中对象时，样式调整立即生效；未选择对象时，设置会作为新建对象的默认值并自动保存。</p>
+          </section>
+
+          <div class="shortcut-card">
+            <h3>快捷操作</h3>
+            <dl>
+              <div><dt>V/P/S/L/Y/M/N/R/T/B/K/I/X/C/O</dt><dd>切换工具</dd></div>
+              <div><dt>滚轮</dt><dd>缩放画布</dd></div>
+              <div><dt>空格+拖动 / 中键</dt><dd>平移画布</dd></div>
+              <div><dt>Esc</dt><dd>取消当前步骤</dd></div>
+            </dl>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="inputDialog" class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="inputDialogTitle" aria-describedby="inputDialogMessage" hidden>
+      <form id="inputDialogForm" class="app-dialog-card">
+        <h2 id="inputDialogTitle">输入</h2>
+        <p id="inputDialogMessage"></p>
+        <textarea id="inputDialogValue" rows="3" autocomplete="off"></textarea>
+        <div class="app-dialog-actions">
+          <button id="inputDialogCancel" type="button">取消</button>
+          <button id="inputDialogConfirm" type="submit" class="primary-button">确定</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      if (location.protocol === "file:") {
+        const shell = document.querySelector(".app-shell");
+        shell?.setAttribute("inert", "");
+
+        const notice = document.createElement("div");
+        notice.className = "direct-open-notice";
+        notice.setAttribute("role", "alertdialog");
+        notice.setAttribute("aria-modal", "true");
+        notice.innerHTML = `
+          <div class="direct-open-notice__card">
+            <strong>请使用启动程序打开 SketchpadNext</strong>
+            <p>你现在是直接打开 index.html。浏览器会阻止本地 JavaScript 模块，因此页面能显示，但按钮和画布无法操作。</p>
+            <p>请关闭这个页面，双击同一文件夹中的 <b>SketchpadNext.html</b>。它是不需要 CMD 的可直接使用版。</p>
+          </div>
+        `;
+        document.body.appendChild(notice);
+      } else {
+        import("./src/app.js");
+      }
+    </script>
+  </body>
+</html>

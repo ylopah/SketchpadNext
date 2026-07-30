@@ -1,0 +1,12 @@
+{
+    "name":  "sketchpad-next",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "description":  "A modern dynamic geometry sketchpad prototype.",
+    "scripts":  {
+                    "build:standalone":  "node build-standalone.mjs",
+                    "start":  "node server.mjs",
+                    "test":  "node build-standalone.mjs && node --test tests/geometry.test.js"
+                }
+}

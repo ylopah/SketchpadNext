@@ -1,0 +1,23 @@
+# Third-party reference material is not part of the public source package.
+references/
+
+# Local dependencies, caches, logs and coverage output.
+node_modules/
+.cache/
+coverage/
+.nyc_output/
+tmp/
+*.log
+
+# Local environment and editor state.
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# User-created sketch files are private by default.
+*.spn
+!examples/**/*.spn
