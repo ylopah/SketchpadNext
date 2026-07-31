@@ -7,6 +7,6 @@
     "scripts":  {
                     "build:standalone":  "node build-standalone.mjs",
                     "start":  "node server.mjs",
-                    "test":  "node build-standalone.mjs && node --test tests/geometry.test.js tests/preferences.test.js tests/responsive.test.js tests/expression.test.js tests/measurement-extended.test.js tests/measurement-notation.test.js tests/numeric-coordinate.test.js tests/feature-surface.test.js"
+                    "test":  "node build-standalone.mjs && node --test tests/geometry.test.js tests/preferences.test.js tests/responsive.test.js tests/expression.test.js tests/measurement-extended.test.js tests/measurement-notation.test.js tests/numeric-coordinate.test.js tests/feature-surface.test.js tests/inversion.test.js tests/transform-integration.test.js"
                 }
 }

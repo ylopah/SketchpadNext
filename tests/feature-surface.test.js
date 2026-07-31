@@ -33,6 +33,7 @@ test("numeric and coordinate inspector controls have unique ids", () => {
     "numericObjectSection",
     "numericObjectDetails",
     "editNumericObjectButton",
+    "insertNumericIntoCalculationButton",
     "coordinateSystemSection",
     "coordinateUnitX",
     "coordinateUnitY",
@@ -50,6 +51,48 @@ test("numeric and coordinate inspector controls have unique ids", () => {
       id + " should appear exactly once",
     );
   });
+});
+
+test("calculation composer is non-modal and exposes every insertion surface once", () => {
+  const calculationIds = [
+    "calculationPanel",
+    "calculationForm",
+    "calculationPanelTitle",
+    "closeCalculationPanelButton",
+    "calculationName",
+    "calculationExpression",
+    "calculationPreview",
+    "calculationVariables",
+    "calculationOperators",
+    "calculationFunctions",
+    "cancelCalculationButton",
+    "saveCalculationButton",
+  ];
+
+  calculationIds.forEach((id) => {
+    assert.equal(
+      occurrences(indexHtml, 'id="' + id + '"'),
+      1,
+      id + " should appear exactly once",
+    );
+  });
+  assert.match(indexHtml, /id="calculationPanel"[^>]*aria-modal="false"/);
+  assert.match(indexHtml, /data-calculation-token="\*"/);
+  assert.match(indexHtml, /data-calculation-template="sqrt\(\|\)"/);
+  assert.match(indexHtml, /点击画布中的度量、参数或计算结果/);
+});
+
+test("transform menu distinguishes symmetry modes and exposes circle inversion", () => {
+  ["markInversionCircle", "centralSymmetry", "invert"].forEach((value) => {
+    assert.equal(
+      occurrences(indexHtml, 'value="' + value + '"'),
+      1,
+      value + " should appear exactly once in the transform menu",
+    );
+  });
+  assert.match(indexHtml, /<option value="reflect">轴对称<\/option>/);
+  assert.match(indexHtml, /<option value="centralSymmetry">中心对称<\/option>/);
+  assert.match(indexHtml, /<option value="invert">圆反演<\/option>/);
 });
 
 test("application keeps calculation editing and coordinate snapping contracts", () => {

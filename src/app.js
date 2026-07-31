@@ -16,6 +16,7 @@ import {
   savePreferences,
 } from "./core/preferences.js";
 import { parseMathText, plainMathText } from "./core/text-format.js";
+import { evaluateExpression, supportedFunctions, validateIdentifier } from "./core/expression.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const AUTOSAVE_KEY = "sketchpad-next.autosave.v1";
@@ -118,6 +119,8 @@ const elements = Object.fromEntries([
   "pathMarkKindRow", "pathMarkKind",
   "angleMarkOpacityRow", "angleMarkOpacity", "angleMarkOpacityValue", "angleMarkDirectionRow", "angleMarkShowDirection", "angleMarkReverse", "batchRenameButton",
   "numericObjectSection", "numericObjectDetails", "editNumericObjectButton",
+  "calculationPanel", "calculationForm", "calculationPanelTitle", "closeCalculationPanelButton", "calculationName", "calculationExpression",
+  "calculationPreview", "calculationVariables", "calculationOperators", "calculationFunctions", "cancelCalculationButton", "saveCalculationButton", "insertNumericIntoCalculationButton",
   "coordinateSystemSection", "coordinateUnitX", "coordinateUnitY", "coordinateGridType", "coordinateShowGrid", "coordinateShowTicks", "coordinateShowLabels", "applyCoordinateSystemButton",
   "inputDialog", "inputDialogForm", "inputDialogTitle", "inputDialogMessage", "inputDialogValue", "inputDialogCancel", "inputDialogConfirm",
 ].map((id) => [id, document.getElementById(id)]));
@@ -173,6 +176,9 @@ let dialogPreviousFocus = null;
 let objectClipboard = null;
 let pasteCount = 0;
 let lastTransform = null;
+let calculationEditingId = null;
+let calculationPanelPreviousFocus = null;
+let calculationSourceSignature = "";
 let customTools = loadCustomTools();
 let currentProjectHandle;
 const projectHandleRestorePromise = restoreProjectHandle().then((handle) => {
@@ -1024,6 +1030,7 @@ function updateUiState() {
   elements.selectionBadge.textContent = selection.length ? "已选择" : "未选择";
   elements.toolHint.textContent = interactionHint();
   syncInspectorControls(selection);
+  refreshCalculationVariables();
 }
 
 function toolName(tool) {
@@ -1405,6 +1412,18 @@ async function handleSinglePointerDown(event) {
   }
   if (event.button !== 0) return;
   event.preventDefault();
+
+  if (isCalculationPanelOpen()) {
+    const directId = event.target?.closest?.("[data-object-id]")?.dataset.objectId;
+    const directObject = directId ? documentModel.getObject(directId) : null;
+    const numericObject = NUMERIC_OBJECT_TYPES.has(directObject?.type)
+      ? directObject
+      : documentModel.hitTest(pointerWorld, selectionTolerance())?.object;
+    if (NUMERIC_OBJECT_TYPES.has(numericObject?.type)) {
+      insertNumericObjectIntoCalculation(numericObject);
+      return;
+    }
+  }
 
   if (currentTool === "info") {
     const hit = documentModel.hitTest(pointerWorld, selectionTolerance());
@@ -2253,14 +2272,238 @@ function handleWheel(event) {
 }
 
 function calculationFunctionHelp() {
-  return "sin cos tan asin acos atan sind cosd tand asind acosd atand sqrt abs ln log exp sgn sign round trunc floor ceil rad deg min max atan2 mod";
+  return supportedFunctions.join(" ");
+}
+
+const NUMERIC_OBJECT_TYPES = new Set(["parameter", "calculation", "measurement"]);
+
+function numericVariableToken(object) {
+  if (!object || !NUMERIC_OBJECT_TYPES.has(object.type)) return "";
+  return object.type === "measurement" ? object.id.replace("obj-", "m") : String(object.name || "");
+}
+
+function numericVariableSources(excludeId = null) {
+  const sourcesByToken = new Map();
+  for (const object of documentModel.objects) {
+    if (object.id === excludeId || !NUMERIC_OBJECT_TYPES.has(object.type)) continue;
+    const token = numericVariableToken(object);
+    const value = documentModel.getNumericValue(object);
+    if (!token || value === null || !Number.isFinite(value)) continue;
+    sourcesByToken.set(token, { object, token, value });
+  }
+  return [...sourcesByToken.values()];
 }
 
 function numericVariableSummary(excludeId = null) {
-  return documentModel.objects
-    .filter((object) => object.id !== excludeId && ["parameter", "calculation", "measurement"].includes(object.type) && documentModel.getNumericValue(object) !== null)
-    .map((object) => `${object.type === "measurement" ? object.id.replace("obj-", "m") : object.name}=${documentModel.getNumericValue(object)}`)
+  return numericVariableSources(excludeId)
+    .map(({ token, value }) => `${token}=${value}`)
     .join("，");
+}
+
+function isCalculationPanelOpen() {
+  return Boolean(elements.calculationPanel && !elements.calculationPanel.hidden);
+}
+
+function calculationDefaultName() {
+  const usedNames = new Set(documentModel.objects
+    .filter((object) => object.type === "calculation")
+    .map((object) => object.name));
+  let index = 1;
+  while (usedNames.has(`c${index}`)) index += 1;
+  return `c${index}`;
+}
+
+function calculationSourceLabel(object) {
+  if (object.type === "measurement") {
+    const text = documentModel.getMeasurementText(object, settings.measurementDecimals);
+    const plainText = text ? plainMathText(text, { enableScripts: true }) : "";
+    return plainText.split(/\s*=\s*/)[0] || "度量值";
+  }
+  return object.type === "parameter" ? `参数 ${object.name}` : `计算 ${object.name}`;
+}
+
+function calculationVariables(excludeId = calculationEditingId) {
+  return Object.fromEntries(numericVariableSources(excludeId)
+    .map(({ object, token }) => [token, object.id]));
+}
+
+function calculationContext(excludeId = calculationEditingId) {
+  return Object.fromEntries(numericVariableSources(excludeId)
+    .map(({ token, value }) => [token, value]));
+}
+
+function setCalculationPreview(message, state = "empty") {
+  if (!elements.calculationPreview) return;
+  elements.calculationPreview.textContent = message;
+  elements.calculationPreview.dataset.state = state;
+}
+
+function updateCalculationPreview() {
+  if (!isCalculationPanelOpen()) return { valid: false };
+  const name = elements.calculationName.value.trim();
+  const expression = elements.calculationExpression.value.trim();
+  let error = "";
+  let value = null;
+  if (!validateIdentifier(name)) error = "结果名称必须以英文字母或下划线开头，且只能包含字母、数字和下划线";
+  else if (!expression) error = "请输入计算表达式";
+  else {
+    try {
+      value = evaluateExpression(expression, calculationContext());
+      if (!Number.isFinite(value)) error = "表达式结果不是有限数值";
+    } catch (exception) {
+      error = exception?.message || "表达式无法计算";
+    }
+  }
+  elements.calculationName.setAttribute("aria-invalid", String(!validateIdentifier(name)));
+  elements.calculationExpression.setAttribute("aria-invalid", String(Boolean(expression && error)));
+  elements.saveCalculationButton.disabled = Boolean(error);
+  if (error) setCalculationPreview(`错误：${error}`, expression || name ? "error" : "empty");
+  else {
+    const decimals = Math.max(0, Math.min(10, Math.round(Number(settings.measurementDecimals) || 0)));
+    setCalculationPreview(`预览：${name} = ${value.toFixed(decimals)}`, "valid");
+  }
+  return { valid: !error, name, expression, value, error };
+}
+
+function closeCalculationPanel({ restoreFocus = true } = {}) {
+  if (!elements.calculationPanel) return;
+  elements.calculationPanel.hidden = true;
+  elements.insertNumericIntoCalculationButton.textContent = "用于新建计算";
+  calculationEditingId = null;
+  calculationSourceSignature = "";
+  const previousFocus = calculationPanelPreviousFocus;
+  calculationPanelPreviousFocus = null;
+  if (restoreFocus && previousFocus?.isConnected && typeof previousFocus.focus === "function") {
+    previousFocus.focus({ preventScroll: true });
+  }
+}
+
+function refreshCalculationVariables({ force = false } = {}) {
+  if (!isCalculationPanelOpen()) return;
+  if (calculationEditingId && documentModel.getObject(calculationEditingId)?.type !== "calculation") {
+    closeCalculationPanel();
+    showToast("正在编辑的计算已不存在，面板已关闭", "warning");
+    return;
+  }
+  const sources = numericVariableSources(calculationEditingId);
+  const signature = JSON.stringify(sources.map(({ object, token, value }) => [object.id, token, value, calculationSourceLabel(object)]));
+  if (force || signature !== calculationSourceSignature) {
+    calculationSourceSignature = signature;
+    elements.calculationVariables.replaceChildren();
+    if (!sources.length) {
+      const empty = document.createElement("p");
+      empty.className = "calculation-variable-empty";
+      empty.textContent = "暂无可用的度量、参数或计算结果";
+      elements.calculationVariables.append(empty);
+    } else for (const { object, token, value } of sources) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "calculation-variable-chip";
+      button.dataset.variable = token;
+      button.dataset.objectId = object.id;
+      button.title = `插入 ${token}（${calculationSourceLabel(object)}）`;
+      button.textContent = `${token} · ${calculationSourceLabel(object)} = ${value}`;
+      elements.calculationVariables.append(button);
+    }
+  }
+  updateCalculationPreview();
+}
+
+function insertCalculationText(text) {
+  if (!isCalculationPanelOpen() || !text) return false;
+  const input = elements.calculationExpression;
+  const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
+  const end = Number.isInteger(input.selectionEnd) ? input.selectionEnd : start;
+  input.focus({ preventScroll: true });
+  input.setRangeText(String(text), start, end, "end");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+
+function insertCalculationTemplate(template) {
+  const source = String(template || "");
+  const marker = source.indexOf("|");
+  const text = marker >= 0 ? `${source.slice(0, marker)}${source.slice(marker + 1)}` : source;
+  if (!isCalculationPanelOpen() || !text) return false;
+  const input = elements.calculationExpression;
+  const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
+  const end = Number.isInteger(input.selectionEnd) ? input.selectionEnd : start;
+  input.focus({ preventScroll: true });
+  input.setRangeText(text, start, end, "end");
+  if (marker >= 0) input.setSelectionRange(start + marker, start + marker);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+
+function openCalculationPanel(objectOrId = null) {
+  if (!elements.calculationPanel) return false;
+  const object = typeof objectOrId === "string" ? documentModel.getObject(objectOrId) : objectOrId;
+  const calculation = object?.type === "calculation" ? object : null;
+  if (!isCalculationPanelOpen()) calculationPanelPreviousFocus = document.activeElement;
+  calculationEditingId = calculation?.id || null;
+  calculationSourceSignature = "";
+  elements.calculationPanelTitle.textContent = calculation ? `编辑计算 ${calculation.name}` : "新建计算";
+  elements.saveCalculationButton.textContent = calculation ? "保存修改" : "创建计算";
+  elements.calculationName.value = calculation?.name || calculationDefaultName();
+  elements.calculationExpression.value = calculation?.expression || "";
+  elements.calculationPanel.hidden = false;
+  elements.insertNumericIntoCalculationButton.textContent = "插入到当前计算";
+  refreshCalculationVariables({ force: true });
+  requestAnimationFrame(() => {
+    const target = calculation ? elements.calculationExpression : elements.calculationName;
+    target.focus({ preventScroll: true });
+    if (target === elements.calculationExpression) target.setSelectionRange(target.value.length, target.value.length);
+    else target.select();
+  });
+  return true;
+}
+
+function insertNumericObjectIntoCalculation(objectOrId) {
+  const object = typeof objectOrId === "string" ? documentModel.getObject(objectOrId) : objectOrId;
+  if (!object || !NUMERIC_OBJECT_TYPES.has(object.type)) return false;
+  if (object.id === calculationEditingId) {
+    showToast("计算不能引用自身", "warning");
+    return false;
+  }
+  const value = documentModel.getNumericValue(object);
+  if (value === null || !Number.isFinite(value)) {
+    showToast("该数值对象当前无有效数值", "warning");
+    return false;
+  }
+  if (!isCalculationPanelOpen()) openCalculationPanel();
+  const inserted = insertCalculationText(numericVariableToken(object));
+  if (inserted) showToast(`已插入 ${numericVariableToken(object)}`);
+  return inserted;
+}
+
+function saveCalculationPanel() {
+  const preview = updateCalculationPreview();
+  if (!preview.valid) return false;
+  const variables = calculationVariables();
+  const editingId = calculationEditingId;
+  let saved = null;
+  let updated = false;
+  mutate(() => {
+    if (editingId) {
+      updated = documentModel.updateCalculation(editingId, preview.name, preview.expression, variables);
+      if (updated) selectOnly(editingId);
+    } else {
+      saved = documentModel.addCalculation(preview.name, preview.expression, variables, {
+        x: view.x + view.width * 0.06,
+        y: view.y + view.height * (0.12 + numericVariableSources().length * 0.045),
+      }, settings);
+      updated = Boolean(saved);
+      if (saved) selectOnly(saved.id);
+    }
+  });
+  if (!updated) {
+    setCalculationPreview("错误：名称或表达式无效，请检查变量、函数与循环引用", "error");
+    showToast("计算未保存，请检查名称、变量和循环引用", "warning");
+    return false;
+  }
+  closeCalculationPanel();
+  showToast(editingId ? "计算定义已更新" : "动态计算已创建");
+  return true;
 }
 
 async function editNumericObject(objectOrId) {
@@ -2277,16 +2520,7 @@ async function editNumericObject(objectOrId) {
     showToast(updated ? "参数已更新" : "无法更新参数", updated ? "info" : "warning");
     return updated;
   }
-  const name = await askUser("计算结果名称（英文字母开头）", object.name, { title: "编辑计算" });
-  if (name == null) return false;
-  const available = numericVariableSummary(object.id);
-  const expression = await askUser(`输入表达式。可用：${available || "pi、e"}\n函数：${calculationFunctionHelp()}`, object.expression, { title: "编辑计算", multiline: true });
-  if (expression == null) return false;
-  if (name.trim() === object.name && expression.trim() === object.expression) return false;
-  let updated = false;
-  mutate(() => { updated = documentModel.updateCalculation(object.id, name, expression); if (updated) selectOnly(object.id); });
-  showToast(updated ? "计算定义已更新" : "名称或表达式无效，请检查变量和函数", updated ? "info" : "warning");
-  return updated;
+  return openCalculationPanel(object);
 }
 
 async function handleDoubleClick(event) {
@@ -2903,14 +3137,23 @@ function createTransformedObject(object, kind, value) {
     ? kind === "translate" ? documentModel.addTranslatedPoint(object.id, value.dx, value.dy, settings)
       : kind === "rotate" ? documentModel.addRotatedPoint(object.id, documentModel.markedCenterId, value, settings)
         : kind === "scale" ? documentModel.addScaledPoint(object.id, documentModel.markedCenterId, value, settings)
-          : documentModel.addReflectedPoint(object.id, documentModel.markedMirrorId, settings)
+          : kind === "reflect" ? documentModel.addReflectedPoint(object.id, documentModel.markedMirrorId, settings)
+            : kind === "invert" ? documentModel.addInvertedPoint(object.id, documentModel.markedInversionCircleId, settings)
+              : null
     : documentModel.addTransformedShape(object.id, kind, value, settings);
+}
+
+function supportsGeometryTransform(object, kind) {
+  if (object.type === "point") return true;
+  if (!documentModel.isShape(object.id) || object.type === "coordinateSystem") return false;
+  if (kind !== "invert") return true;
+  const geometry = documentModel.getShapeGeometry(object.id);
+  return geometry?.kind === "circle" || (geometry?.kind === "line" && !geometry.segment && !geometry.ray);
 }
 
 function transformSelectedGeometry(kind, value = null, iterations = 1) {
   const selection = selectedObjects();
-  const transformable = selection.filter((object) =>
-    object.type === "point" || (documentModel.isShape(object.id) && object.type !== "coordinateSystem"));
+  const transformable = selection.filter((object) => supportsGeometryTransform(object, kind));
   if (!transformable.length) return false;
   mutate(() => {
     let generation = transformable;
@@ -2929,7 +3172,7 @@ function transformSelectedGeometry(kind, value = null, iterations = 1) {
 async function runTransformCommand(command) {
   const selection = selectedObjects();
   if (command === "iterate") {
-    if (!lastTransform) { showToast("请先完成一次平移、旋转、缩放或反射"); return; }
+    if (!lastTransform) { showToast("请先完成一次平移、旋转、缩放、对称或反演"); return; }
     const count = Number(await askUser("重复次数（会保留每一代变换像）", "3", { title: "重复变换" }));
     if (!Number.isInteger(count) || count < 1 || count > 50) { showToast("重复次数应为 1～50 的整数"); return; }
     if (transformSelectedGeometry(lastTransform.kind, lastTransform.value, count)) showToast(`已生成 ${count} 代动态变换像`);
@@ -2954,6 +3197,16 @@ async function runTransformCommand(command) {
     showToast("已标记反射镜面");
     return;
   }
+  if (command === "markInversionCircle") {
+    if (selection.length !== 1 || documentModel.getShapeGeometry(selection[0])?.kind !== "circle") {
+      showToast("请选择一个圆作为反演圆");
+      return;
+    }
+    mutate(() => documentModel.markInversionCircle(selection[0].id));
+    showToast("已标记反演圆；其圆心和半径会动态参与反演");
+    return;
+  }
+  let transformKind = command;
   let value = null;
   if (command === "translate") {
     const input = await askUser("输入平移量 dx, dy", "40, 0", { title: "平移" });
@@ -2968,17 +3221,28 @@ async function runTransformCommand(command) {
     if (!documentModel.markedCenterId) { showToast("请先选中一个点并标记变换中心"); return; }
     value = Number(await askUser("输入旋转角度（度，正值为顺时针）", "90", { title: "旋转" }));
     if (!Number.isFinite(value)) return;
+  } else if (command === "centralSymmetry") {
+    if (!documentModel.markedCenterId) { showToast("请先选中一个点并标记变换中心"); return; }
+    transformKind = "rotate";
+    value = 180;
   } else if (command === "scale") {
     if (!documentModel.markedCenterId) { showToast("请先选中一个点并标记变换中心"); return; }
     value = Number(await askUser("输入缩放比例", "2", { title: "缩放" }));
     if (!Number.isFinite(value) || Math.abs(value) <= 1e-9) { showToast("缩放比例必须是非零数值"); return; }
   } else if (command === "reflect") {
     if (!documentModel.markedMirrorId) { showToast("请先选中一条线并标记反射镜面"); return; }
+  } else if (command === "invert") {
+    if (!documentModel.markedInversionCircleId) { showToast("请先选中一个圆并标记反演圆"); return; }
   }
-  if (!transformSelectedGeometry(command, value)) showToast("当前选择中没有可变换的几何对象");
+  if (!transformSelectedGeometry(transformKind, value)) {
+    showToast(command === "invert"
+      ? "反演目前精确支持点、完整直线和圆；线段、射线、圆弧暂不支持"
+      : "当前选择中没有可变换的几何对象", "warning");
+  }
   else {
-    lastTransform = { kind: command, value: value && typeof value === "object" ? { ...value } : value };
-    showToast("已创建动态变换像");
+    lastTransform = { kind: transformKind, value: value && typeof value === "object" ? { ...value } : value };
+    showToast(command === "centralSymmetry" ? "已创建动态中心对称像"
+      : command === "invert" ? "已创建动态反演像" : "已创建动态变换像");
   }
 }
 
@@ -3053,27 +3317,7 @@ async function runDataCommand(command) {
     return;
   }
   if (command === "calculation") {
-    const available = numericObjects.map((object) =>
-      `${object.type === "measurement" ? object.id.replace("obj-", "m") : object.name}=${documentModel.getNumericValue(object)}`).join("，");
-    const defaultName = `c${documentModel.objects.filter((object) => object.type === "calculation").length + 1}`;
-    const name = await askUser("计算结果名称（英文字母开头）", defaultName, { title: "新建计算" });
-    if (!name) return;
-    const expression = await askUser(`输入表达式。可用：${available || "pi、e"}\n函数：${calculationFunctionHelp()}`, "2*pi", { title: "新建计算", multiline: true });
-    if (!expression) return;
-    const variables = {};
-    for (const object of numericObjects) {
-      const variable = object.type === "measurement" ? object.id.replace("obj-", "m") : object.name;
-      variables[variable] = object.id;
-    }
-    let created = null;
-    mutate(() => {
-      created = documentModel.addCalculation(name, expression, variables, {
-        x: view.x + view.width * 0.06,
-        y: view.y + view.height * (0.12 + numericObjects.length * 0.045),
-      }, settings);
-      selectOnly(created?.id || null);
-    });
-    showToast(created ? "动态计算已创建" : "表达式无效，请检查变量名和括号");
+    openCalculationPanel();
     return;
   }
   if (command === "coordinateSystem") {
@@ -3237,6 +3481,7 @@ function syncInspectorControls(selection = selectedObjects()) {
   elements.numericObjectSection.hidden = true;
   elements.coordinateSystemSection.hidden = true;
   elements.editNumericObjectButton.disabled = true;
+  elements.insertNumericIntoCalculationButton.disabled = true;
   elements.applyCoordinateSystemButton.disabled = true;
   const points = selection.filter((object) => object.type === "point");
   const shapes = selection.filter((object) => documentModel.isShape(object.id));
@@ -3275,6 +3520,9 @@ function syncInspectorControls(selection = selectedObjects()) {
   const object = selection[0];
   if (["measurement", "parameter", "calculation"].includes(object.type)) {
     elements.numericObjectSection.hidden = false;
+    const canInsert = documentModel.getNumericValue(object) !== null && object.id !== calculationEditingId;
+    elements.insertNumericIntoCalculationButton.disabled = !canInsert;
+    elements.insertNumericIntoCalculationButton.textContent = isCalculationPanelOpen() ? "插入到当前计算" : "用于新建计算";
     if (object.type === "measurement") {
       const measurementText = documentModel.getMeasurementText(object, settings.measurementDecimals);
       elements.numericObjectDetails.textContent = measurementText
@@ -3636,6 +3884,11 @@ function handleKeyDown(event) {
       event.preventDefault();
       finishDialog(null);
     }
+    return;
+  }
+  if (isCalculationPanelOpen() && event.key === "Escape") {
+    event.preventDefault();
+    closeCalculationPanel();
     return;
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -4114,6 +4367,30 @@ function applyCoordinateSystemSettings() {
 elements.editNumericObjectButton.addEventListener("click", () => {
   const object = selectedId ? documentModel.getObject(selectedId) : null;
   if (["parameter", "calculation"].includes(object?.type)) editNumericObject(object);
+});
+elements.insertNumericIntoCalculationButton.addEventListener("click", () => {
+  const object = selectedId ? documentModel.getObject(selectedId) : null;
+  insertNumericObjectIntoCalculation(object);
+});
+elements.closeCalculationPanelButton.addEventListener("click", () => closeCalculationPanel());
+elements.cancelCalculationButton.addEventListener("click", () => closeCalculationPanel());
+elements.calculationForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveCalculationPanel();
+});
+elements.calculationName.addEventListener("input", updateCalculationPreview);
+elements.calculationExpression.addEventListener("input", updateCalculationPreview);
+elements.calculationVariables.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-object-id]");
+  if (button) insertNumericObjectIntoCalculation(button.dataset.objectId);
+});
+elements.calculationOperators.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-calculation-token]");
+  if (button) insertCalculationText(button.dataset.calculationToken);
+});
+elements.calculationFunctions.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-calculation-template]");
+  if (button) insertCalculationTemplate(button.dataset.calculationTemplate);
 });
 elements.coordinateGridType.addEventListener("change", syncCoordinateUnitMode);
 elements.coordinateUnitX.addEventListener("input", () => {

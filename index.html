@@ -176,10 +176,13 @@
                 <option value="">变换</option>
                 <option value="markCenter">标记旋转/缩放中心</option>
                 <option value="markMirror">标记反射镜面</option>
+                <option value="markInversionCircle">标记反演圆</option>
                 <option value="translate">平移</option>
                 <option value="rotate">旋转</option>
+                <option value="centralSymmetry">中心对称</option>
                 <option value="scale">缩放</option>
-                <option value="reflect">反射</option>
+                <option value="reflect">轴对称</option>
+                <option value="invert">圆反演</option>
                 <option value="iterate">重复最近变换…</option>
               </select>
               <select id="dataMenu" class="construction-menu" aria-label="计算、坐标与函数绘图">
@@ -331,6 +334,7 @@
             <h3>度量与计算</h3>
             <p id="numericObjectDetails" class="inspector-note" role="status" aria-live="polite">选择度量、参数或计算结果后，可查看和编辑其定义。</p>
             <button id="editNumericObjectButton" class="wide-button compact-button" type="button">编辑数值对象</button>
+            <button id="insertNumericIntoCalculationButton" class="wide-button compact-button" type="button" disabled>插入到计算</button>
           </section>
 
           <section id="coordinateSystemSection" class="inspector-section" hidden>
@@ -378,6 +382,72 @@
         </aside>
       </main>
     </div>
+
+    <aside id="calculationPanel" class="calculation-panel" role="dialog" aria-modal="false" aria-labelledby="calculationPanelTitle" hidden>
+      <form id="calculationForm" class="calculation-panel-card" autocomplete="off">
+        <header class="calculation-panel-header">
+          <div>
+            <span class="calculation-panel-eyebrow">动态数值</span>
+            <h2 id="calculationPanelTitle">新建计算</h2>
+          </div>
+          <button id="closeCalculationPanelButton" class="calculation-panel-close" type="button" aria-label="关闭计算面板">×</button>
+        </header>
+
+        <label class="calculation-field" for="calculationName">
+          <span>结果名称</span>
+          <input id="calculationName" name="calculationName" type="text" inputmode="text" spellcheck="false" placeholder="例如 c1" required />
+        </label>
+
+        <label class="calculation-field" for="calculationExpression">
+          <span>表达式</span>
+          <textarea id="calculationExpression" name="calculationExpression" rows="3" spellcheck="false" aria-describedby="calculationPanelHint calculationPreview" placeholder="例如 m1 * 2 + sin(a)" required></textarea>
+        </label>
+        <p id="calculationPanelHint" class="calculation-panel-hint">点击画布中的度量、参数或计算结果，即可插入到当前光标位置。</p>
+
+        <div class="calculation-preview-row">
+          <span>预览</span>
+          <output id="calculationPreview" role="status" aria-live="polite">请输入表达式</output>
+        </div>
+
+        <section class="calculation-token-section" aria-labelledby="calculationVariablesTitle">
+          <h3 id="calculationVariablesTitle">可用变量</h3>
+          <div id="calculationVariables" class="calculation-chip-list" role="list" aria-label="可插入的数值变量"></div>
+        </section>
+
+        <section class="calculation-token-section" aria-labelledby="calculationOperatorsTitle">
+          <h3 id="calculationOperatorsTitle">运算符</h3>
+          <div id="calculationOperators" class="calculation-keypad" aria-label="常用运算符">
+            <button type="button" data-calculation-token="+" aria-label="加">+</button>
+            <button type="button" data-calculation-token="-" aria-label="减">−</button>
+            <button type="button" data-calculation-token="*" aria-label="乘">×</button>
+            <button type="button" data-calculation-token="/" aria-label="除">÷</button>
+            <button type="button" data-calculation-token="^" aria-label="乘方">xʸ</button>
+            <button type="button" data-calculation-token="(" aria-label="左括号">(</button>
+            <button type="button" data-calculation-token=")" aria-label="右括号">)</button>
+            <button type="button" data-calculation-token="pi" aria-label="圆周率">π</button>
+          </div>
+        </section>
+
+        <section class="calculation-token-section" aria-labelledby="calculationFunctionsTitle">
+          <h3 id="calculationFunctionsTitle">常用函数</h3>
+          <div id="calculationFunctions" class="calculation-keypad calculation-function-keypad" aria-label="常用函数">
+            <button type="button" data-calculation-template="sqrt(|)">sqrt</button>
+            <button type="button" data-calculation-template="abs(|)">abs</button>
+            <button type="button" data-calculation-template="sin(|)">sin</button>
+            <button type="button" data-calculation-template="cos(|)">cos</button>
+            <button type="button" data-calculation-template="tan(|)">tan</button>
+            <button type="button" data-calculation-template="min(|, )">min</button>
+            <button type="button" data-calculation-template="max(|, )">max</button>
+            <button type="button" data-calculation-template="round(|)">round</button>
+          </div>
+        </section>
+
+        <footer class="calculation-panel-actions">
+          <button id="cancelCalculationButton" type="button">取消</button>
+          <button id="saveCalculationButton" class="primary-button" type="submit">创建计算</button>
+        </footer>
+      </form>
+    </aside>
 
     <div id="helpDialog" class="app-dialog shell-dialog" role="dialog" aria-modal="true" aria-labelledby="helpDialogTitle" hidden>
       <section class="app-dialog-card shell-dialog-card help-dialog-card">

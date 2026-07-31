@@ -3,6 +3,8 @@ import {
   EPSILON,
   distance,
   intersectGeometries,
+  invertGeometryInCircle,
+  invertPointInCircle,
   projectPointToLine,
   triangleCentroid,
   triangleIncircle,
@@ -122,6 +124,7 @@ export class GeometryDocument {
     this.nextLabel = 0;
     this.markedCenterId = null;
     this.markedMirrorId = null;
+    this.markedInversionCircleId = null;
     if (data) this.load(data);
   }
 
@@ -135,6 +138,8 @@ export class GeometryDocument {
     this.nextLabel = Number.isFinite(data.nextLabel) ? Number(data.nextLabel) : this.#inferNextLabel();
     this.markedCenterId = typeof data.markedCenterId === "string" ? data.markedCenterId : null;
     this.markedMirrorId = typeof data.markedMirrorId === "string" ? data.markedMirrorId : null;
+    this.markedInversionCircleId = typeof data.markedInversionCircleId === "string"
+      ? data.markedInversionCircleId : null;
     this.#upgradeLegacyObjects();
     this.#normalizePaintOrder();
     this.#validate();
@@ -1192,6 +1197,11 @@ export class GeometryDocument {
     return this.#addTransformedPoint({ kind: "reflected", parentId, mirrorId }, settings);
   }
 
+  addInvertedPoint(parentId, circleId, settings) {
+    if (this.getShapeGeometry(circleId)?.kind !== "circle") return null;
+    return this.#addTransformedPoint({ kind: "inverted", parentId, circleId }, settings);
+  }
+
   addTransformedShape(parentShapeId, transformKind, value, settings = {}) {
     const parent = this.getObject(parentShapeId);
     if (!parent || !SHAPE_TYPES.has(parent.type) || parent.type === "coordinateSystem") return null;
@@ -1209,6 +1219,12 @@ export class GeometryDocument {
     } else if (transformKind === "reflect") {
       if (this.getShapeGeometry(this.markedMirrorId)?.kind !== "line") return null;
       transform = { kind: "reflect", mirrorId: this.markedMirrorId };
+    } else if (transformKind === "invert") {
+      const geometry = this.getShapeGeometry(parentShapeId);
+      const inversionCircle = this.getShapeGeometry(this.markedInversionCircleId);
+      const supportedLine = geometry?.kind === "line" && !geometry.segment && !geometry.ray;
+      if ((!supportedLine && geometry?.kind !== "circle") || inversionCircle?.kind !== "circle") return null;
+      transform = { kind: "invert", circleId: this.markedInversionCircleId };
     } else return null;
     const object = {
       id: this.#id(), type: "transformedShape", parentShapeId, transform,
@@ -1244,6 +1260,12 @@ export class GeometryDocument {
   markMirror(shapeId) {
     if (this.getShapeGeometry(shapeId)?.kind !== "line") return false;
     this.markedMirrorId = shapeId;
+    return true;
+  }
+
+  markInversionCircle(shapeId) {
+    if (this.getShapeGeometry(shapeId)?.kind !== "circle") return false;
+    this.markedInversionCircleId = shapeId;
     return true;
   }
 
@@ -1771,6 +1793,12 @@ export class GeometryDocument {
       const projection = projectPointToLine(parent, mirror.a, mirror.b);
       return { x: projection.point.x * 2 - parent.x, y: projection.point.y * 2 - parent.y };
     }
+    if (definition.kind === "inverted") {
+      const parent = this.getPointPosition(definition.parentId, nextStack);
+      const inversionCircle = this.getShapeGeometry(definition.circleId, nextStack);
+      if (!parent || inversionCircle?.kind !== "circle") return null;
+      return invertPointInCircle(parent, inversionCircle);
+    }
     if (definition.kind === "on-shape") {
       const geometry = this.getShapeGeometry(definition.parentId, nextStack);
       if (!geometry) return null;
@@ -1825,6 +1853,11 @@ export class GeometryDocument {
       const parent = this.getShapeGeometry(shape.parentShapeId, nextStack);
       if (!parent) return null;
       const transform = shape.transform || {};
+      if (transform.kind === "invert") {
+        const inversionCircle = this.getShapeGeometry(transform.circleId, nextStack);
+        return inversionCircle?.kind === "circle"
+          ? invertGeometryInCircle(parent, inversionCircle) : null;
+      }
       const center = transform.centerId ? this.getPointPosition(transform.centerId, nextStack) : null;
       const mirror = transform.mirrorId ? this.getShapeGeometry(transform.mirrorId, nextStack) : null;
       const transformPoint = (point) => {
@@ -2823,6 +2856,7 @@ export class GeometryDocument {
         return [object.definition.parentId, object.definition.centerId];
       }
       if (object.definition.kind === "reflected") return [object.definition.parentId, object.definition.mirrorId];
+      if (object.definition.kind === "inverted") return [object.definition.parentId, object.definition.circleId];
       if (object.definition.kind === "on-shape") return [object.definition.parentId];
       if (object.definition.kind === "plotted") {
         return [object.definition.coordinateSystemId, ...new Set(Object.values(object.definition.variables || {}))];
@@ -2843,6 +2877,7 @@ export class GeometryDocument {
       const dependencies = [object.parentShapeId];
       if (object.transform?.centerId) dependencies.push(object.transform.centerId);
       if (object.transform?.mirrorId) dependencies.push(object.transform.mirrorId);
+      if (object.transform?.circleId) dependencies.push(object.transform.circleId);
       return dependencies;
     }
     if (object.type === "radiusCircle") return [object.centerId, object.radiusSegmentId];
@@ -2893,6 +2928,7 @@ export class GeometryDocument {
     this.paintOrder = this.paintOrder.filter((id) => !removed.has(id));
     if (this.markedCenterId && removed.has(this.markedCenterId)) this.markedCenterId = null;
     if (this.markedMirrorId && removed.has(this.markedMirrorId)) this.markedMirrorId = null;
+    if (this.markedInversionCircleId && removed.has(this.markedInversionCircleId)) this.markedInversionCircleId = null;
     return [...removed];
   }
 
@@ -2937,6 +2973,7 @@ export class GeometryDocument {
       nextLabel: this.nextLabel,
       markedCenterId: this.markedCenterId,
       markedMirrorId: this.markedMirrorId,
+      markedInversionCircleId: this.markedInversionCircleId,
       paintOrder: [...this.paintOrder],
       objects: clone(this.objects),
     };

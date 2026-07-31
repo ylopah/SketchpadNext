@@ -145,6 +145,7 @@ test("standalone build bundles every non-leaf runtime module", async () => {
   assert.match(builder, /replaceAll\("\.\.\/core\/environment\.js", environmentUrl\)/);
   assert.match(builder, /replaceAll\("\.\/measurement-notation\.js", measurementNotationUrl\)/);
   assert.match(builder, /replaceAll\("\.\/text-format\.js", textFormatUrl\)/);
+  assert.match(builder, /replaceAll\("\.\/core\/expression\.js", expressionUrl\)/);
   assert.match(standalone, /id="environmentBadge"/);
   assert.match(standalone, /detectClientEnvironment/);
 });

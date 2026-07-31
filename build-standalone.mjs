@@ -77,6 +77,7 @@ const bootstrap = `    <script>
           .replaceAll("./core/document.js", documentUrl)
           .replaceAll("./core/history.js", historyUrl)
           .replaceAll("./core/geometry.js", geometryUrl)
+          .replaceAll("./core/expression.js", expressionUrl)
           .replaceAll("./core/view.js", viewUrl)
           .replaceAll("./core/selection.js", selectionUrl)
           .replaceAll("./core/preferences.js", preferencesUrl)

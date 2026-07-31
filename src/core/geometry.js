@@ -28,6 +28,120 @@ export function distance(a, b) {
   return length(subtract(a, b));
 }
 
+function isFinitePoint(point) {
+  return Number.isFinite(point?.x) && Number.isFinite(point?.y);
+}
+
+function inversionCircleData(inversionCircle) {
+  const center = inversionCircle?.center;
+  const radius = Number(inversionCircle?.radius);
+  return inversionCircle?.kind === "circle" && isFinitePoint(center) &&
+    Number.isFinite(radius) && radius > EPSILON
+    ? { center, radius }
+    : null;
+}
+
+/**
+ * Invert a point in a circle. The inversion center itself has no finite image.
+ */
+export function invertPointInCircle(point, inversionCircle) {
+  const inversion = inversionCircleData(inversionCircle);
+  if (!isFinitePoint(point) || !inversion) return null;
+  const { center, radius: inversionRadius } = inversion;
+  const offset = subtract(point, center);
+  const distanceSquared = dot(offset, offset);
+  if (!Number.isFinite(distanceSquared) || distanceSquared <= EPSILON * EPSILON) return null;
+  const factor = inversionRadius * inversionRadius / distanceSquared;
+  const result = add(center, scale(offset, factor));
+  return isFinitePoint(result) ? result : null;
+}
+
+/**
+ * Invert a full line in a circle. A line through the inversion center remains
+ * a line; every other line becomes a circle through the inversion center.
+ * Segments and rays are deliberately rejected because their exact images need
+ * bounded-arc/unbounded-branch geometry that the current core does not expose.
+ */
+export function invertLineInCircle(line, inversionCircle) {
+  const inversion = inversionCircleData(inversionCircle);
+  if (line?.kind !== "line" || line.segment || line.ray ||
+      !isFinitePoint(line.a) || !isFinitePoint(line.b) ||
+      !inversion) return null;
+  const { center, radius: inversionRadius } = inversion;
+  const direction = subtract(line.b, line.a);
+  const directionLength = length(direction);
+  if (!Number.isFinite(directionLength) || directionLength <= EPSILON) return null;
+  const projection = projectPointToLine(center, line.a, line.b).point;
+  const centerToLine = subtract(projection, center);
+  const distanceSquared = dot(centerToLine, centerToLine);
+  const coordinateScale = Math.max(
+    1,
+    inversionRadius,
+    Math.abs(center.x), Math.abs(center.y),
+    Math.abs(line.a.x), Math.abs(line.a.y),
+    Math.abs(line.b.x), Math.abs(line.b.y),
+  );
+  if (distanceSquared <= (EPSILON * coordinateScale) ** 2) {
+    return {
+      kind: "line",
+      a: { ...line.a },
+      b: { ...line.b },
+      segment: false,
+      ray: false,
+    };
+  }
+  const factor = inversionRadius * inversionRadius / (2 * distanceSquared);
+  const imageCenter = add(center, scale(centerToLine, factor));
+  const imageRadius = distance(imageCenter, center);
+  if (!isFinitePoint(imageCenter) || !Number.isFinite(imageRadius) || imageRadius <= EPSILON) return null;
+  return { kind: "circle", center: imageCenter, radius: imageRadius };
+}
+
+/**
+ * Invert a circle in another circle. A circle through the inversion center
+ * becomes a full line; every other nondegenerate circle remains a circle.
+ */
+export function invertCircleInCircle(circle, inversionCircle) {
+  const inversion = inversionCircleData(inversionCircle);
+  const sourceRadius = Number(circle?.radius);
+  if (circle?.kind !== "circle" || !isFinitePoint(circle.center) ||
+      !Number.isFinite(sourceRadius) || sourceRadius <= EPSILON ||
+      !inversion) return null;
+  const { center, radius: inversionRadius } = inversion;
+  const centerOffset = subtract(circle.center, center);
+  const centerDistanceSquared = dot(centerOffset, centerOffset);
+  const sourceRadiusSquared = sourceRadius * sourceRadius;
+  const power = centerDistanceSquared - sourceRadiusSquared;
+  const powerTolerance = EPSILON * Math.max(1, centerDistanceSquared, sourceRadiusSquared);
+  if (Math.abs(power) <= powerTolerance) {
+    if (centerDistanceSquared <= EPSILON * EPSILON) return null;
+    const foot = add(
+      center,
+      scale(centerOffset, inversionRadius * inversionRadius / (2 * centerDistanceSquared)),
+    );
+    const centerDistance = Math.sqrt(centerDistanceSquared);
+    const direction = {
+      x: -centerOffset.y / centerDistance,
+      y: centerOffset.x / centerDistance,
+    };
+    const other = add(foot, direction);
+    return isFinitePoint(foot) && isFinitePoint(other)
+      ? { kind: "line", a: foot, b: other, segment: false, ray: false }
+      : null;
+  }
+  const factor = inversionRadius * inversionRadius / power;
+  const imageCenter = add(center, scale(centerOffset, factor));
+  const imageRadius = Math.abs(factor) * sourceRadius;
+  if (!isFinitePoint(imageCenter) || !Number.isFinite(imageRadius) || imageRadius <= EPSILON) return null;
+  return { kind: "circle", center: imageCenter, radius: imageRadius };
+}
+
+export function invertGeometryInCircle(geometry, inversionCircle) {
+  if (geometry?.kind === "line") return invertLineInCircle(geometry, inversionCircle);
+  if (geometry?.kind === "circle") return invertCircleInCircle(geometry, inversionCircle);
+  return null;
+}
+
 function isNondegenerateTriangle(a, b, c) {
   if (![a, b, c].every((point) =>
     Number.isFinite(point?.x) && Number.isFinite(point?.y))) return false;
