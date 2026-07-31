@@ -91,12 +91,14 @@ test("an orientation hint prevents a virtual keyboard from flipping the layout",
 });
 
 test("page and styles expose the mobile layout contract", async () => {
-  const [html, styles, app] = await Promise.all([
+  const [html, styles, app, environmentModule] = await Promise.all([
     readFile(path.join(root, "index.html"), "utf8"),
     readFile(path.join(root, "styles.css"), "utf8"),
     readFile(path.join(root, "src/app.js"), "utf8"),
+    readFile(path.join(root, "src/core/environment.js"), "utf8"),
   ]);
   assert.match(html, /viewport-fit=cover/);
+  assert.match(html, /<button id="environmentBadge"/);
   for (const id of ["environmentBadge", "mobileActionsMenu", "inspectorToggleButton", "inspectorPanel", "inspectorBackdrop"]) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
@@ -104,10 +106,12 @@ test("page and styles expose the mobile layout contract", async () => {
   assert.match(styles, /data-device="phone"\]\[data-orientation="portrait"/);
   assert.match(styles, /data-device="phone"\]\[data-orientation="landscape"/);
   assert.match(styles, /safe-area-inset-bottom/);
+  assert.match(styles, /environment-badge\[data-open="true"\]/);
   assert.match(styles, /\.workspace \{[^}]*overflow: hidden/);
   assert.match(app, /const cssPixels = .*=== "coarse" \? 18 : 10/);
   assert.match(app, /rect\.width \* 1\.25/);
   assert.match(app, /orientationChanged/);
+  assert.match(environmentModule, /addEventListener\("click", handleBadgeClick\)/);
 });
 
 test("standalone build bundles the environment module", async () => {

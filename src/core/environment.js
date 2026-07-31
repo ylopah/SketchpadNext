@@ -113,7 +113,10 @@ export function initializeClientEnvironment(
     root.style.setProperty("--app-viewport-height", `${viewportHeight}px`);
     if (badge) {
       badge.textContent = current.label;
-      badge.title = `${current.browser} · ${current.os} · ${current.orientation === "portrait" ? "竖屏" : "横屏"}\nUA: ${current.userAgent || "不可用"}`;
+      const detail = `${current.browser} · ${current.os} · ${current.orientation === "portrait" ? "竖屏" : "横屏"}\nUA: ${current.userAgent || "不可用"}`;
+      badge.title = detail;
+      badge.dataset.detail = detail;
+      badge.setAttribute("aria-label", current.label + "，点击查看完整浏览器信息");
     }
     const nextSignature = [current.device, current.orientation, current.input, Math.round(layoutWidth), Math.round(layoutHeight), Math.round(viewportHeight)].join("|");
     if (nextSignature !== signature) {
@@ -123,6 +126,19 @@ export function initializeClientEnvironment(
       }));
     }
     return current;
+  };
+
+  const setBadgeOpen = (open) => {
+    if (!badge) return;
+    badge.dataset.open = String(Boolean(open));
+    badge.setAttribute("aria-expanded", String(Boolean(open)));
+  };
+  const handleBadgeClick = (event) => {
+    event.stopPropagation();
+    setBadgeOpen(badge?.dataset.open !== "true");
+  };
+  const handleDocumentPointerDown = (event) => {
+    if (badge?.dataset.open === "true" && !badge.contains(event.target)) setBadgeOpen(false);
   };
 
   const scheduleUpdate = () => {
@@ -137,6 +153,8 @@ export function initializeClientEnvironment(
     });
   };
   update();
+  badge?.addEventListener("click", handleBadgeClick);
+  documentObject.addEventListener?.("pointerdown", handleDocumentPointerDown);
   windowObject.addEventListener("resize", scheduleUpdate);
   windowObject.addEventListener("orientationchange", scheduleUpdate);
   windowObject.visualViewport?.addEventListener("resize", scheduleUpdate);
@@ -145,6 +163,8 @@ export function initializeClientEnvironment(
     get current() { return current; },
     update,
     destroy() {
+      badge?.removeEventListener("click", handleBadgeClick);
+      documentObject.removeEventListener?.("pointerdown", handleDocumentPointerDown);
       windowObject.removeEventListener("resize", scheduleUpdate);
       windowObject.removeEventListener("orientationchange", scheduleUpdate);
       windowObject.visualViewport?.removeEventListener("resize", scheduleUpdate);

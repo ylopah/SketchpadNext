@@ -97,19 +97,56 @@ button { color: inherit; }
 .brand strong span { color: var(--accent); }
 .brand small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; letter-spacing: 1.1px; }
 .environment-badge {
+  position: relative;
   display: inline-flex;
   align-items: center;
   margin-top: 3px;
   padding: 2px 6px;
   border: 1px solid #d9d1fd;
   border-radius: 999px;
+  appearance: none;
   background: var(--accent-soft);
   color: var(--accent-dark);
+  cursor: pointer;
   font-size: 8px;
   font-weight: 700;
   line-height: 1.25;
   letter-spacing: .25px;
   white-space: nowrap;
+}
+
+.environment-badge::after {
+  content: attr(data-detail);
+  position: fixed;
+  z-index: 1000;
+  top: calc(60px + env(safe-area-inset-top, 0px));
+  left: max(8px, env(safe-area-inset-left, 0px));
+  width: min(360px, calc(100vw - 16px));
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #171b25;
+  box-shadow: var(--shadow);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity .15s ease, transform .15s ease, visibility .15s ease;
+}
+
+.environment-badge:hover::after,
+.environment-badge:focus-visible::after,
+.environment-badge[data-open="true"]::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .brand-mark { position: relative; width: 34px; height: 34px; border-radius: 10px; background: #171b25; box-shadow: 0 6px 15px rgba(30, 24, 68, 0.25); }
