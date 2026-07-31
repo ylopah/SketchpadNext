@@ -5,6 +5,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   preferencesVersion: 2,
   pointSize: 6,
   pointColor: "#000000",
+  autoNamePoints: false,
   lineWidth: 2,
   lineColor: "#334155",
   lineDash: "solid",
@@ -45,6 +46,7 @@ export function normalizePreferences(value = {}) {
     pointColor: legacyPointColor
       ? DEFAULT_PREFERENCES.pointColor
       : color(source.pointColor, DEFAULT_PREFERENCES.pointColor),
+    autoNamePoints: source.autoNamePoints === true,
     lineWidth: finiteNumber(source.lineWidth, DEFAULT_PREFERENCES.lineWidth, 0.5, 8, 0.5),
     lineColor: color(source.lineColor, DEFAULT_PREFERENCES.lineColor),
     lineDash: source.lineDash === "dashed" ? "dashed" : "solid",

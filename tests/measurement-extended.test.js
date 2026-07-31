@@ -39,7 +39,7 @@ test("point-to-line distance respects segment, ray, and infinite-line bounds", (
   close(document.getMeasurementValue(lineDistance), 4);
   assert.equal(
     document.getMeasurementText(segmentDistance),
-    "\u70b9 C \u5230\u7ebf\u6bb5 AB \u7684\u8ddd\u79bb = 6.40",
+    "d(C,\\overline{AB}) = 6.40",
   );
 
   document.movePoint(point.id, { x: 15, y: 4 });
@@ -63,11 +63,11 @@ test("polygon area and perimeter follow ordered vertices dynamically", () => {
   close(document.getMeasurementValue(perimeter), 14);
   assert.equal(
     document.getMeasurementText(area),
-    "\u591a\u8fb9\u5f62 ABCD \u9762\u79ef = 12.00",
+    "S(ABCD) = 12.00",
   );
   assert.equal(
     document.getMeasurementText(perimeter),
-    "\u591a\u8fb9\u5f62 ABCD \u5468\u957f = 14.00",
+    "P(ABCD) = 14.00",
   );
 
   document.movePoint(c.id, { x: 4, y: 4 });
@@ -76,7 +76,7 @@ test("polygon area and perimeter follow ordered vertices dynamically", () => {
   document.renamePoint(d.id, "P");
   assert.equal(
     document.getMeasurementText(area),
-    "\u591a\u8fb9\u5f62 ABCP \u9762\u79ef = 14.00",
+    "S(ABCP) = 14.00",
   );
 });
 

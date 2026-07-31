@@ -10,6 +10,8 @@ import {
   triangleOrthocenter,
 } from "./geometry.js";
 import { evaluateExpression, expressionIdentifiers, validateIdentifier } from "./expression.js";
+import { formatMeasurementText } from "./measurement-notation.js";
+import { plainMathText } from "./text-format.js";
 
 const POINT_TYPES = new Set(["point"]);
 const TEXT_TYPES = new Set(["text", "measurement", "parameter", "calculation", "table", "actionButton"]);
@@ -31,7 +33,7 @@ function defaultPointStyle(settings) {
   return {
     radius: Number(settings.pointSize) || 6,
     color: settings.pointColor || "#000000",
-    showLabel: settings.showLabels !== false,
+    showLabel: settings.autoNamePoints === false ? false : settings.showLabels !== false,
   };
 }
 
@@ -207,6 +209,13 @@ export class GeometryDocument {
     ).length;
   }
 
+  #newPointLabel(settings) {
+    if (settings?.autoNamePoints === false) return "";
+    const label = this.nextAvailablePointLabel();
+    this.nextLabel += 1;
+    return label;
+  }
+
   #validate() {
     const ids = new Set();
     const objectById = new Map();
@@ -333,7 +342,7 @@ export class GeometryDocument {
       id: this.#id(),
       type: "point",
       definition: { kind: "free", x: position.x, y: position.y },
-      label: label || labelForIndex(this.nextLabel++),
+      label: label || this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -727,7 +736,7 @@ export class GeometryDocument {
       evaluateExpression(definition.yExpression, variables);
     } catch { return null; }
     const point = {
-      id: this.#id(), type: "point", definition, label: labelForIndex(this.nextLabel++),
+      id: this.#id(), type: "point", definition, label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 }, style: defaultPointStyle(settings),
     };
     this.objects.push(point);
@@ -858,9 +867,10 @@ export class GeometryDocument {
   getObjectName(objectOrId) {
     const object = typeof objectOrId === "string" ? this.getObject(objectOrId) : objectOrId;
     if (!object) return "未知对象";
-    const pointLabel = (id) => this.getObject(id)?.type === "point" ? this.getObject(id).label : "?";
+    const pointLabel = (id) => this.getObject(id)?.type === "point"
+      ? String(this.getObject(id).label || "").trim() || "未命名点" : "?";
     const pair = (firstId, secondId) => `${pointLabel(firstId)}${pointLabel(secondId)}`;
-    if (object.type === "point") return `点 ${object.label}`;
+    if (object.type === "point") return String(object.label || "").trim() ? `点 ${object.label}` : "未命名点";
     if (object.type === "segment") return `线段 ${pair(object.pointAId, object.pointBId)}`;
     if (object.type === "line") return `直线 ${pair(object.pointAId, object.pointBId)}`;
     if (object.type === "ray") return `射线 ${pair(object.pointAId, object.pointBId)}`;
@@ -899,109 +909,7 @@ export class GeometryDocument {
   }
 
   getMeasurementText(measurementOrId, decimalPlaces = 2) {
-    const object = typeof measurementOrId === "string" ? this.getObject(measurementOrId) : measurementOrId;
-    if (object?.type !== "measurement") return null;
-    const points = object.parents.map((id) => this.getPointPosition(id));
-    const shapes = object.parents.map((id) => this.getShapeGeometry(id));
-    const decimals = Math.max(0, Math.min(10, Math.round(Number(decimalPlaces) || 0)));
-    const format = (value) => Number.isFinite(value) ? value.toFixed(decimals) : null;
-    const parents = object.parents.map((id) => this.getObject(id));
-    const pointLabel = (index) => parents[index]?.type === "point" ? parents[index].label : "?";
-    if (object.measurementKind === "distance" && points.length === 2 && points.every(Boolean)) {
-      return `距离 ${pointLabel(0)}${pointLabel(1)} = ${format(distance(points[0], points[1]))}`;
-    }
-    if (object.measurementKind === "pointLineDistance" && object.parents.length === 2) {
-      const pointIndex = points.findIndex(Boolean);
-      const lineIndex = shapes.findIndex((shape) => shape?.kind === "line");
-      const value = this.getMeasurementValue(object);
-      if (pointIndex < 0 || lineIndex < 0 || pointIndex === lineIndex || value === null) return null;
-      return `\u70b9 ${pointLabel(pointIndex)} \u5230${this.getObjectName(parents[lineIndex])} \u7684\u8ddd\u79bb = ${format(value)}`;
-    }
-    if (["polygonArea", "polygonPerimeter"].includes(object.measurementKind)
-      && points.length >= 3
-      && points.every(Boolean)) {
-      const value = this.getMeasurementValue(object);
-      if (value === null) return null;
-      const polygonName = points.map((_, index) => pointLabel(index)).join("");
-      const quantity = object.measurementKind === "polygonArea" ? "\u9762\u79ef" : "\u5468\u957f";
-      return `\u591a\u8fb9\u5f62 ${polygonName} ${quantity} = ${format(value)}`;
-    }
-    if (object.measurementKind === "collinearity" && points.length === 3 && points.every(Boolean)) {
-      const value = this.getMeasurementValue(object);
-      if (value === null) return null;
-      const tolerance = 1e-6 * Math.max(1, distance(points[0], points[1]), distance(points[1], points[2]));
-      const status = value <= tolerance ? "数值验证：共线" : "数值验证：不共线";
-      return `${pointLabel(0)}、${pointLabel(1)}、${pointLabel(2)} 共线误差 = ${value.toExponential(3)}（${status}）`;
-    }
-    if (object.measurementKind === "pointCircleError"
-      && points[0]
-      && shapes[1]?.kind === "circle") {
-      const value = this.getMeasurementValue(object);
-      const tolerance = 1e-6 * Math.max(1, shapes[1].radius);
-      const status = value <= tolerance ? "数值验证：共圆" : "数值验证：不共圆";
-      return `点 ${pointLabel(0)} 到 ${this.getObjectName(parents[1])} 的圆周误差 = ${value.toExponential(3)}（${status}）`;
-    }
-    if (object.measurementKind === "length" && shapes[0]?.kind === "line" && shapes[0].segment) {
-      return `${this.getObjectName(parents[0])} 长度 = ${format(distance(shapes[0].a, shapes[0].b))}`;
-    }
-    if (object.measurementKind === "arcLength" && shapes[0]?.kind === "arc") {
-      return `${this.getObjectName(parents[0])} 长度 = ${format(this.getMeasurementValue(object))}`;
-    }
-    if (object.measurementKind === "ratio" && this.getMeasurementValue(object) !== null) {
-      return `${this.getObjectName(parents[0])} / ${this.getObjectName(parents[1])} = ${format(this.getMeasurementValue(object))}`;
-    }
-    if (object.measurementKind === "angle" && shapes.length === 1 && shapes[0]?.kind === "angleMark") {
-      return `${this.getObjectName(parents[0])} = ${format(this.getMeasurementValue(object))}°`;
-    }
-    if (object.measurementKind === "angle" && shapes.length === 1 && shapes[0]?.kind === "arc") {
-      return `${this.getObjectName(parents[0])} 圆心角 = ${format(this.getMeasurementValue(object))}°`;
-    }
-    if (object.measurementKind === "angle" && shapes.length === 2 && shapes.every((shape) => shape?.kind === "line")) {
-      return `${this.getObjectName(parents[0])} 与 ${this.getObjectName(parents[1])} 的夹角 = ${format(this.getMeasurementValue(object))}°`;
-    }
-    if (object.measurementKind === "angle" && points.length === 3 && points.every(Boolean)) {
-      const first = { x: points[0].x - points[1].x, y: points[0].y - points[1].y };
-      const second = { x: points[2].x - points[1].x, y: points[2].y - points[1].y };
-      const denominator = Math.hypot(first.x, first.y) * Math.hypot(second.x, second.y);
-      if (denominator <= EPSILON) return null;
-      const cosine = Math.max(-1, Math.min(1, (first.x * second.x + first.y * second.y) / denominator));
-      return `∠${pointLabel(0)}${pointLabel(1)}${pointLabel(2)} = ${format(Math.acos(cosine) * 180 / Math.PI)}°`;
-    }
-    if (["radius", "circumference", "circleArea"].includes(object.measurementKind) && shapes[0]?.kind === "circle") {
-      const circleName = this.getObjectName(parents[0]);
-      if (object.measurementKind === "radius") return `${circleName} 半径 = ${format(shapes[0].radius)}`;
-      if (object.measurementKind === "circumference") return `${circleName} 周长 = ${format(Math.PI * 2 * shapes[0].radius)}`;
-      return `${circleName} 面积 = ${format(Math.PI * shapes[0].radius * shapes[0].radius)}`;
-    }
-    if (object.measurementKind === "coordinates" && points[0]) {
-      const system = object.parents[1] ? this.getCoordinateSystem(object.parents[1]) : null;
-      const coordinates = system ? {
-        x: (points[0].x - system.origin.x) / system.unitX,
-        y: (system.origin.y - points[0].y) / system.unitY,
-      } : points[0];
-      return `点 ${pointLabel(0)} 坐标 = (${format(coordinates.x)}, ${format(coordinates.y)})`;
-    }
-    if (["coordinateX", "coordinateY"].includes(object.measurementKind) && points[0]) {
-      const value = this.getMeasurementValue(object);
-      if (value === null) return null;
-      const coordinateName = object.measurementKind === "coordinateX" ? "横坐标 x" : "纵坐标 y";
-      return `点 ${pointLabel(0)} ${coordinateName} = ${format(value)}`;
-    }
-    if (object.measurementKind === "slope" && shapes[0]?.kind === "line") {
-      const dx = shapes[0].b.x - shapes[0].a.x;
-      const dy = shapes[0].b.y - shapes[0].a.y;
-      return Math.abs(dx) <= EPSILON ? `${this.getObjectName(parents[0])} 斜率 = ∞`
-        : `${this.getObjectName(parents[0])} 斜率 = ${format(dy / dx)}`;
-    }
-    if (object.measurementKind === "pointValue" && this.getMeasurementValue(object) !== null) {
-      const point = parents[0];
-      const parent = point?.type === "point" ? this.getObject(point.definition.parentId) : null;
-      const geometry = parent ? this.getShapeGeometry(parent) : null;
-      const unit = geometry && geometry.kind !== "line" ? " rad" : "";
-      const subject = parent ? `（位于${this.getObjectName(parent)}）` : "";
-      return `点 ${pointLabel(0)}${subject} 路径参数 = ${format(this.getMeasurementValue(object))}${unit}`;
-    }
-    return null;
+    return formatMeasurementText(this, measurementOrId, decimalPlaces);
   }
 
   updateText(textId, content) {
@@ -1044,7 +952,7 @@ export class GeometryDocument {
       id: this.#id(),
       type: "point",
       definition,
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -1076,7 +984,7 @@ export class GeometryDocument {
       id: this.#id(),
       type: "point",
       definition: { kind, parents },
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -1117,7 +1025,7 @@ export class GeometryDocument {
         pointBId,
         outerCircleId,
       },
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -1133,7 +1041,7 @@ export class GeometryDocument {
       id: this.#id(),
       type: "point",
       definition: { kind: "internal-tangency", parents: [outerCircleId, innerCircleId] },
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -1256,7 +1164,7 @@ export class GeometryDocument {
       id: this.#id(),
       type: "point",
       definition: { kind: "midpoint", parents: [pointAId, pointBId] },
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -1319,7 +1227,7 @@ export class GeometryDocument {
       id: this.#id(),
       type: "point",
       definition,
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -1558,7 +1466,7 @@ export class GeometryDocument {
         if (automaticCircleCenterIds.has(source.id)) {
           object.label = "圆心";
           object.style = { ...defaultPointStyle({}), ...object.style, showLabel: false };
-        } else object.label = labelForIndex(this.nextLabel++);
+        } else object.label = String(source.label || "").trim() ? this.#newPointLabel({}) : "";
         if (object.definition.kind === "free") { object.definition.x += dx; object.definition.y += dy; }
       } else if (TEXT_TYPES.has(object.type) || MEDIA_TYPES.has(object.type)) { object.x += dx; object.y += dy; }
       else if (object.type === "doodle") object.points = object.points.map((point) => ({ x: point.x + dx, y: point.y + dy }));
@@ -1753,7 +1661,7 @@ export class GeometryDocument {
         parents: [firstShapeId, secondShapeId],
         branch,
       },
-        label: labelForIndex(this.nextLabel++),
+        label: this.#newPointLabel(settings),
         labelOffset: { x: 12, y: -12 },
         style: defaultPointStyle(settings),
     };
@@ -1774,7 +1682,7 @@ export class GeometryDocument {
         parents: [firstShapeId, secondShapeId],
         knownPointId,
       },
-      label: labelForIndex(this.nextLabel++),
+      label: this.#newPointLabel(settings),
       labelOffset: { x: 12, y: -12 },
       style: defaultPointStyle(settings),
     };
@@ -2453,8 +2361,112 @@ export class GeometryDocument {
     if (!point || point.type !== "point") return false;
     const normalized = String(label ?? "").trim().slice(0, 12);
     if (!normalized) return false;
+    const wasUnnamed = !String(point.label || "").trim();
     point.label = normalized;
+    if (wasUnnamed) point.style = { ...(point.style || {}), showLabel: true };
     return true;
+  }
+
+  nextAvailablePointLabel(excludePointId = null) {
+    const occupied = new Set(this.objects
+      .filter((object) => object.type === "point" && object.id !== excludePointId)
+      .map((object) => String(object.label || "").trim())
+      .filter(Boolean));
+    let index = 0;
+    while (occupied.has(labelForIndex(index))) index += 1;
+    return labelForIndex(index);
+  }
+
+  assignNextPointLabel(pointId) {
+    const point = this.getObject(pointId);
+    if (!point || point.type !== "point") return null;
+    if (String(point.label || "").trim()) return point.label;
+    point.label = this.nextAvailablePointLabel(point.id);
+    point.style = { ...(point.style || {}), showLabel: true };
+    return point.label;
+  }
+
+  suggestPointLabelOffset(pointId, options = {}) {
+    const point = this.getObject(pointId);
+    const origin = this.getPointPosition(point);
+    if (!point || point.type !== "point" || !origin) return { x: 12, y: -12 };
+    const fontSize = Math.max(8, Number(options.fontSize) || 17);
+    const width = Math.max(fontSize * 0.58, Array.from(String(point.label || ""))
+      .reduce((sum, character) => sum + fontSize * (/\s/.test(character) ? 0.32 : /[A-Z0-9]/.test(character) ? 0.62 : 0.9), 0));
+    const centerOffset = { x: width / 2, y: -fontSize * 0.32 };
+    const halfDiagonal = Math.hypot(width, fontSize * 1.05) / 2;
+    const baseRadius = Math.max(1, Number(options.baseRadius) || 32);
+    const margin = 4;
+    const directions = [];
+    for (const object of this.objects) {
+      if (object.hidden || !["segment", "line", "ray"].includes(object.type)) continue;
+      const otherId = object.pointAId === point.id ? object.pointBId
+        : object.pointBId === point.id ? object.pointAId : null;
+      const other = otherId ? this.getPointPosition(otherId) : null;
+      if (!other) continue;
+      const dx = other.x - origin.x; const dy = other.y - origin.y; const length = Math.hypot(dx, dy);
+      if (length <= EPSILON) continue;
+      const direction = { x: dx / length, y: dy / length };
+      if (!directions.some((candidate) => Math.abs(candidate.x * direction.x + candidate.y * direction.y) > 0.9999)) {
+        directions.push(direction);
+      }
+    }
+    let preferred = null;
+    if (directions.length === 2) {
+      const sum = { x: directions[0].x + directions[1].x, y: directions[0].y + directions[1].y };
+      const length = Math.hypot(sum.x, sum.y);
+      if (length > EPSILON) preferred = { x: -sum.x / length, y: -sum.y / length };
+    }
+    const samples = preferred ? [{ ...preferred, preferred: true }] : [];
+    for (let index = 0; index < 32; index += 1) {
+      const angle = -Math.PI / 2 + index * Math.PI * 2 / 32;
+      const direction = { x: Math.cos(angle), y: Math.sin(angle), preferred: false };
+      if (!preferred || preferred.x * direction.x + preferred.y * direction.y < 0.999) samples.push(direction);
+    }
+    const scoreCandidate = (center) => {
+      let clearance = Number.POSITIVE_INFINITY;
+      for (const other of this.objects) {
+        if (other.hidden || other.id === point.id || other.type !== "point") continue;
+        const position = this.getPointPosition(other);
+        if (!position) continue;
+        const available = distance(center, position)
+          - halfDiagonal - Math.max(1, Number(other.style?.radius) || 6) - margin;
+        if (available < 0) return null;
+        clearance = Math.min(clearance, available);
+        if (other.style?.showLabel !== false && String(other.label || "").trim()) {
+          const otherFontSize = Math.max(8, Number(other.style?.labelFontSize) || fontSize);
+          const otherWidth = Math.max(otherFontSize * 0.58, Array.from(String(other.label))
+            .reduce((sum, character) => sum + otherFontSize * (/\s/.test(character) ? 0.32 : /[A-Z0-9]/.test(character) ? 0.62 : 0.9), 0));
+          const otherHalfDiagonal = Math.hypot(otherWidth, otherFontSize * 1.05) / 2;
+          const offset = other.labelOffset || { x: 12, y: -12 };
+          const otherCenter = {
+            x: position.x + offset.x + otherWidth / 2,
+            y: position.y + offset.y - otherFontSize * 0.32,
+          };
+          const labelClearance = distance(center, otherCenter) - halfDiagonal - otherHalfDiagonal - margin;
+          if (labelClearance < 0) return null;
+          clearance = Math.min(clearance, labelClearance);
+        }
+      }
+      if (this.hitTestShapes(center, halfDiagonal + margin).some((hit) => !hit.object.hidden)) return null;
+      return Number.isFinite(clearance) ? clearance : 1e6;
+    };
+    const maximumRadius = baseRadius + halfDiagonal;
+    const radii = [baseRadius]; const step = Math.max(4, Math.min(8, halfDiagonal / 3 || 4));
+    for (let radius = baseRadius + step; radius < maximumRadius; radius += step) radii.push(radius);
+    if (maximumRadius > baseRadius + EPSILON) radii.push(maximumRadius);
+    for (const radius of radii) {
+      const candidates = samples.map((direction) => {
+        const center = { x: origin.x + direction.x * radius, y: origin.y + direction.y * radius };
+        const clearance = scoreCandidate(center);
+        return clearance === null ? null : { direction, center, score: clearance + (direction.preferred ? 6 : 0) };
+      }).filter(Boolean).sort((first, second) => second.score - first.score);
+      if (candidates.length) return {
+        x: candidates[0].center.x - origin.x - centerOffset.x,
+        y: candidates[0].center.y - origin.y - centerOffset.y,
+      };
+    }
+    return { x: 12, y: -12 };
   }
 
   setPointLabelOffset(pointId, offset, baseRadius = 64, labelGeometry = null) {
@@ -2535,9 +2547,10 @@ export class GeometryDocument {
           : ["parameter", "calculation"].includes(object.type) ? this.getValueText(object) || ""
             : object.type === "table" ? (this.getTableData(object)?.rows || []).map((row) => row.join("  ")).join("\n")
               : object.type === "actionButton" ? object.label : object.content;
-        const lines = String(content).split(/\r?\n/);
+        const visibleContent = plainMathText(content, { enableScripts: true });
+        const lines = String(visibleContent).split(/\r?\n/);
         const longestLine = lines.reduce((longest, line) => Math.max(longest, line.length), 0);
-        const actionWidth = Math.max(72, String(content).length * fontSize * 0.9 + 24);
+        const actionWidth = Math.max(72, String(visibleContent).length * fontSize * 0.9 + 24);
         const width = object.type === "actionButton" ? actionWidth : Math.max(fontSize, longestLine * fontSize * 0.58);
         const left = object.type === "actionButton" ? object.x - 12 : object.x;
         const top = object.type === "actionButton" ? object.y - fontSize - 8 : object.y - fontSize;

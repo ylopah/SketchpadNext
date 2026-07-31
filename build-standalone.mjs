@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (relativePath) => readFile(path.join(root, relativePath), "utf8");
 
-const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, textFormat, latex, preferences, help, environment, shell, app] = await Promise.all([
+const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, textFormat, measurementNotation, latex, preferences, help, environment, shell, app] = await Promise.all([
   read("index.html"),
   read("styles.css"),
   read("src/core/geometry.js"),
@@ -15,6 +15,7 @@ const [htmlSource, styles, geometry, expression, documentModel, history, view, s
   read("src/core/view.js"),
   read("src/core/selection.js"),
   read("src/core/text-format.js"),
+  read("src/core/measurement-notation.js"),
   read("src/core/latex.js"),
   read("src/core/preferences.js"),
   read("src/core/help.js"),
@@ -31,6 +32,7 @@ const moduleSources = JSON.stringify({
   view,
   selection,
   textFormat,
+  measurementNotation,
   latex,
   preferences,
   help,
@@ -51,13 +53,16 @@ const bootstrap = `    <script>
 
         const geometryUrl = createModule(sources.geometry);
         const expressionUrl = createModule(sources.expression);
+        const textFormatUrl = createModule(sources.textFormat);
+        const measurementNotationUrl = createModule(sources.measurementNotation);
         const documentUrl = createModule(sources.documentModel
           .replaceAll("./geometry.js", geometryUrl)
-          .replaceAll("./expression.js", expressionUrl));
+          .replaceAll("./expression.js", expressionUrl)
+          .replaceAll("./measurement-notation.js", measurementNotationUrl)
+          .replaceAll("./text-format.js", textFormatUrl));
         const historyUrl = createModule(sources.history.replaceAll("./document.js", documentUrl));
         const viewUrl = createModule(sources.view);
         const selectionUrl = createModule(sources.selection);
-        const textFormatUrl = createModule(sources.textFormat);
         const latexUrl = createModule(sources.latex
           .replaceAll("./geometry.js", geometryUrl)
           .replaceAll("./text-format.js", textFormatUrl));

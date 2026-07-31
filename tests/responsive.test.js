@@ -100,7 +100,7 @@ test("page and styles expose the mobile layout contract", async () => {
   ]);
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /<button id="environmentBadge"/);
-  for (const id of ["environmentBadge", "mobileActionsMenu", "mobileDocumentTitle", "mobilePageSelect", "mobileShowHiddenButton", "inspectorToggleButton", "inspectorPanel", "inspectorBackdrop"]) {
+  for (const id of ["environmentBadge", "mobileActionsMenu", "mobileDocumentTitle", "mobilePageSelect", "inspectorToggleButton", "inspectorPanel", "inspectorBackdrop"]) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(styles, /100dvh/);
@@ -112,6 +112,19 @@ test("page and styles expose the mobile layout contract", async () => {
   assert.match(styles, /data-inspector="closed"/);
   assert.doesNotMatch(html, /id="gridSize"/);
   assert.match(html, /id="settingsGridSize"/);
+  assert.doesNotMatch(html, /id="settingsSnapToGrid"/);
+  assert.match(html, /id="pointStyleSection"[^>]*hidden/);
+  assert.match(html, /id="lineStyleSection"[^>]*hidden/);
+  for (const label of ["构造", "度量", "变换", "计算与坐标", "显示"]) {
+    assert.match(html, new RegExp(`<option value="">${label}<\\/option>`));
+  }
+  assert.match(html, /文本工具点击未命名点/);
+  assert.match(styles, /data-input="fine"[^\n]*\.enhanced-command-menu/);
+  assert.match(styles, /data-inspector-preview="open"/);
+  assert.match(shell, /function enhanceCommandMenus/);
+  assert.match(shell, /select\.dispatchEvent\(new windowObject\.Event\("change"/);
+  assert.match(shell, /setAttribute\("aria-expanded"/);
+  assert.match(shell, /const setInspectorPreview/);
   assert.match(shell, /root\.dataset\.inspector = shouldOpen/);
   assert.match(shell, /environment\.current\.device === "desktop"/);
   assert.match(shell, /nextLayoutMode === currentInspectorLayoutMode/);
@@ -122,13 +135,16 @@ test("page and styles expose the mobile layout contract", async () => {
   assert.match(environmentModule, /addEventListener\("click", handleBadgeClick\)/);
 });
 
-test("standalone build bundles the environment module", async () => {
+test("standalone build bundles every non-leaf runtime module", async () => {
   const [builder, standalone] = await Promise.all([
     readFile(path.join(root, "build-standalone.mjs"), "utf8"),
     readFile(path.join(root, "SketchpadNext.html"), "utf8"),
   ]);
   assert.match(builder, /read\("src\/core\/environment\.js"\)/);
+  assert.match(builder, /read\("src\/core\/measurement-notation\.js"\)/);
   assert.match(builder, /replaceAll\("\.\.\/core\/environment\.js", environmentUrl\)/);
+  assert.match(builder, /replaceAll\("\.\/measurement-notation\.js", measurementNotationUrl\)/);
+  assert.match(builder, /replaceAll\("\.\/text-format\.js", textFormatUrl\)/);
   assert.match(standalone, /id="environmentBadge"/);
   assert.match(standalone, /detectClientEnvironment/);
 });

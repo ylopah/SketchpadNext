@@ -68,11 +68,47 @@ const COMMAND_SYMBOLS = Object.freeze({
 
 const ESCAPED_LITERALS = new Set(["\\", "_", "^", "{", "}", "[", "]"]);
 
-function appendSegment(segments, text, script = "normal") {
+function appendSegment(segments, text, script = "normal", decoration = null) {
   if (!text) return;
   const previous = segments.at(-1);
-  if (previous?.script === script) previous.text += text;
-  else segments.push({ text, script });
+  if (previous?.script === script && (previous.decoration || null) === decoration) {
+    previous.text += text;
+    return;
+  }
+  const segment = { text, script };
+  if (decoration) segment.decoration = decoration;
+  segments.push(segment);
+}
+
+function matchingBrace(source, openingIndex) {
+  if (source[openingIndex] !== "{") return -1;
+  let depth = 0;
+  for (let index = openingIndex; index < source.length; index += 1) {
+    if (source[index] === "\\" && ESCAPED_LITERALS.has(source[index + 1])) {
+      index += 1;
+      continue;
+    }
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function parseDecoration(source, index, options) {
+  const command = "\\overline";
+  if (!source.startsWith(command, index) || source[index + command.length] !== "{") return null;
+  const opening = index + command.length;
+  const end = matchingBrace(source, opening);
+  if (end < 0) return null;
+  const inner = parseMathText(source.slice(opening + 1, end), {
+    ...options,
+    legacyBracketSubscript: false,
+    enableScripts: true,
+  });
+  return { segments: inner, next: end + 1, decoration: "overline" };
 }
 
 function symbolForCommand(command) {
@@ -143,6 +179,19 @@ export function parseMathText(value, options = {}) {
   const segments = [];
   let index = 0;
   while (index < source.length) {
+    const decoration = parseDecoration(source, index, options);
+    if (decoration) {
+      for (const segment of decoration.segments) {
+        appendSegment(
+          segments,
+          segment.text,
+          segment.script,
+          segment.decoration || decoration.decoration,
+        );
+      }
+      index = decoration.next;
+      continue;
+    }
     const command = parseCommand(source, index);
     if (command) {
       appendSegment(segments, command.text);

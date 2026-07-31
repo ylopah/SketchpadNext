@@ -183,8 +183,8 @@ test("coordinate component measurements render, update, serialize, and feed calc
 
   close(document.getMeasurementValue(coordinateX), 2);
   close(document.getMeasurementValue(coordinateY), 3);
-  assert.equal(document.getMeasurementText(coordinateX), "点 B 横坐标 x = 2.00");
-  assert.equal(document.getMeasurementText(coordinateY), "点 B 纵坐标 y = 3.00");
+  assert.equal(document.getMeasurementText(coordinateX), "x(B) = 2.00");
+  assert.equal(document.getMeasurementText(coordinateY), "y(B) = 3.00");
   assert.deepEqual(calculation.variables, {
     [variableX]: coordinateX.id,
     [variableY]: coordinateY.id,
@@ -205,5 +205,5 @@ test("coordinate component measurements render, update, serialize, and feed calc
   close(document.getNumericValue(calculation), 2);
   const restored = GeometryDocument.fromJSON(document.serialize());
   close(restored.getNumericValue(calculation.id), 2);
-  assert.equal(restored.getMeasurementText(coordinateX.id, 1), "点 B 横坐标 x = 1.0");
+  assert.equal(restored.getMeasurementText(coordinateX.id, 1), "x(B) = 1.0");
 });

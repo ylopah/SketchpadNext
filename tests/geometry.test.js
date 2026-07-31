@@ -432,6 +432,31 @@ test("escapes LaTeX control characters and preserves point subscripts", () => {
   assert.ok(result.code.includes("\\itshape\\fontsize{14pt}{16pt}"));
 });
 
+test("exports overlines and geometry symbols as native TeX math", () => {
+  const document = new GeometryDocument();
+  document.addText(
+    { x: 15, y: 25 },
+    "\\overline{A_1B} ∠ 90° ∞ ε ℓ ⊙",
+    settings,
+  );
+  const result = createTikzExport(document, {
+    view: { x: 0, y: 0, width: 100, height: 60 },
+  });
+
+  assert.ok(result.code.includes(
+    "\\ensuremath{\\overline{\\mbox{A\\textsubscript{1}B}}}",
+  ));
+  assert.ok(result.code.includes("\\ensuremath{\\angle}"));
+  assert.ok(result.code.includes("\\ensuremath{^{\\circ}}"));
+  assert.ok(result.code.includes("\\ensuremath{\\infty}"));
+  assert.ok(result.code.includes("\\ensuremath{\\epsilon}"));
+  assert.ok(result.code.includes("\\ensuremath{\\ell}"));
+  assert.ok(result.code.includes("\\ensuremath{\\odot}"));
+  assert.ok(result.code.includes("\\usepackage{amsmath,amssymb}"));
+  assert.doesNotMatch(result.code, /[∠°∞εℓ⊙]/);
+  assert.doesNotMatch(result.code, /\\usepackage\[UTF8\]\{ctex\}/);
+});
+
 test("omits hidden, undefined and non-finite objects from TikZ output", () => {
   const document = new GeometryDocument();
   const hiddenParent = document.addFreePoint({ x: 10, y: 10 }, settings, "HIDDEN_PARENT");
@@ -563,6 +588,21 @@ test("point labels and canvas text support subscripts, superscripts and geometry
   );
   assert.equal(plainMathText("{angle}A{rightangle} {degree} {lte} {gte}"), "∠A∟ ° ≤ ≥");
   assert.equal(plainMathText("A\\_1"), "A_1");
+  assert.deepEqual(parseMathText("\\overline{A_{12}B^3}", { enableScripts: true }), [
+    { text: "A", script: "normal", decoration: "overline" },
+    { text: "12", script: "sub", decoration: "overline" },
+    { text: "B", script: "normal", decoration: "overline" },
+    { text: "3", script: "super", decoration: "overline" },
+  ]);
+  assert.deepEqual(parseMathText("x+\\overline{AB}+y", { enableScripts: true }), [
+    { text: "x+", script: "normal" },
+    { text: "AB", script: "normal", decoration: "overline" },
+    { text: "+y", script: "normal" },
+  ]);
+  assert.equal(
+    plainMathText("\\overline{A_1B^2}", { enableScripts: true }),
+    "A1B2",
+  );
 });
 
 test("point name editing is deferred until blur and label dragging uses the tighter bound", () => {
@@ -860,12 +900,12 @@ test("measurements update dynamically with their parent geometry", () => {
   const lengthValue = document.addMeasurement("length", [segment.id], { x: 0, y: 20 }, settings);
   const angleValue = document.addMeasurement("angle", [a.id, vertex.id, b.id], { x: 0, y: 40 }, settings);
   const radiusValue = document.addMeasurement("radius", [circle.id], { x: 0, y: 60 }, settings);
-  assert.equal(document.getMeasurementText(distanceValue), "距离 AC = 5.00");
-  assert.equal(document.getMeasurementText(lengthValue), "线段 AC 长度 = 5.00");
+  assert.equal(document.getMeasurementText(distanceValue), "AC = 5.00");
+  assert.equal(document.getMeasurementText(lengthValue), "\\overline{AC} = 5.00");
   assert.equal(document.getMeasurementText(angleValue), "∠ABC = 90.00°");
-  assert.equal(document.getMeasurementText(radiusValue), "圆 A 半径 = 3.00");
+  assert.equal(document.getMeasurementText(radiusValue), "r(⊙A) = 3.00");
   document.movePoint(b.id, { x: 6, y: 0 });
-  assert.equal(document.getMeasurementText(distanceValue), "距离 AC = 6.00");
+  assert.equal(document.getMeasurementText(distanceValue), "AC = 6.00");
   assert.deepEqual(document.dependenciesOf(distanceValue), [a.id, b.id]);
 });
 
@@ -876,10 +916,10 @@ test("collinearity measurement reports normalized point-to-line error", () => {
   const c = document.addFreePoint({ x: 25, y: 0 }, settings);
   const value = document.addMeasurement("collinearity", [a.id, b.id, c.id], { x: 0, y: 0 }, settings);
   close(document.getMeasurementValue(value), 0);
-  assert.match(document.getMeasurementText(value), /A、B、C 共线误差 = 0\.000e\+0（数值验证：共线）/);
+  assert.equal(document.getMeasurementText(value), "ε_{col}(A,B,C) = 0.000e+0");
   document.movePoint(c.id, { x: 25, y: 4 });
   close(document.getMeasurementValue(value), 4);
-  assert.match(document.getMeasurementText(value), /数值验证：不共线/);
+  assert.equal(document.getMeasurementText(value), "ε_{col}(A,B,C) = 4.000e+0");
 });
 
 test("angle marks and arcs can be measured with named dynamic results", () => {
@@ -897,7 +937,7 @@ test("angle marks and arcs can be measured with named dynamic results", () => {
   const circle = document.addCircle(vertex.id, a.id, settings);
   const arc = document.addArcOnCircle(circle.id, a.id, b.id, settings);
   const arcValue = document.addMeasurement("angle", [arc.id], { x: 0, y: 20 }, settings);
-  assert.equal(document.getMeasurementText(arcValue), "弧 BC 圆心角 = 90.00°");
+  assert.equal(document.getMeasurementText(arcValue), "m(⌢BC) = 90.00°");
 });
 
 test("any two line-like objects can report their named smaller angle", () => {
@@ -910,7 +950,7 @@ test("any two line-like objects can report their named smaller angle", () => {
   const perpendicular = document.addPerpendicularLine(origin.id, base.id, settings);
   const value = document.addMeasurement("angle", [parallel.id, perpendicular.id], { x: 0, y: 0 }, settings);
   close(document.getMeasurementValue(value), 90);
-  assert.equal(document.getMeasurementText(value), "过 C 的平行线 与 过 A 的垂线 的夹角 = 90.00°");
+  assert.equal(document.getMeasurementText(value), "∠(ℓ_5,ℓ_6) = 90.00°");
 });
 
 test("arc length, segment ratio, path value and coordinate-system measurements are dynamic", () => {
@@ -931,8 +971,8 @@ test("arc length, segment ratio, path value and coordinate-system measurements a
   close(document.getMeasurementValue(arcValue), Math.PI * 10);
   close(document.getMeasurementValue(ratioValue), 1);
   close(document.getMeasurementValue(pointValue), 0.5);
-  assert.equal(document.getMeasurementText(coordinates), "点 B 坐标 = (1.00, 0.00)");
-  assert.equal(document.getMeasurementText(pointValue), "点 D（位于线段 AB） 路径参数 = 0.50");
+  assert.equal(document.getMeasurementText(coordinates), "B = (1.00, 0.00)");
+  assert.equal(document.getMeasurementText(pointValue), "t(D) = 0.50");
 });
 
 test("translated, rotated, scaled and reflected points remain dynamic", () => {
@@ -1595,6 +1635,77 @@ test("angle and perpendicular bisectors can be built from points created during 
   assert.ok([vertex, horizontal, vertical].every((point) => point.definition.kind === "free"));
   assert.ok(document.addAngleBisector(vertex.id, horizontal.id, vertical.id, settings));
   assert.ok(document.addPerpendicularBisector(horizontal.id, vertical.id, settings));
+});
+
+test("new application points stay unnamed while legacy callers keep automatic labels", () => {
+  const unnamedSettings = { ...settings, autoNamePoints: false };
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, unnamedSettings);
+  const b = document.addFreePoint({ x: 40, y: 0 }, unnamedSettings);
+  const segment = document.addSegment(a.id, b.id, unnamedSettings);
+  const onSegment = document.addPointOnShape(segment.id, { x: 20, y: 0 }, unnamedSettings);
+  const midpoint = document.addMidpoint(a.id, b.id, unnamedSettings);
+  for (const point of [a, b, onSegment, midpoint]) {
+    assert.equal(point.label, "");
+    assert.equal(point.style.showLabel, false);
+  }
+
+  const legacy = new GeometryDocument();
+  assert.equal(legacy.addFreePoint({ x: 0, y: 0 }, settings).label, "A");
+  assert.equal(legacy.addFreePoint({ x: 1, y: 0 }, settings).label, "B");
+});
+
+test("on-demand point labels fill strict alphabetic gaps and hidden labels remain reserved", () => {
+  const unnamedSettings = { ...settings, autoNamePoints: false };
+  const document = new GeometryDocument();
+  const points = Array.from({ length: 9 }, (_, index) =>
+    document.addFreePoint({ x: index * 30, y: 0 }, unnamedSettings));
+  for (const [index, label] of [[0, "A"], [1, "B"], [2, "C"], [3, "E"], [4, "H"]]) {
+    assert.equal(document.renamePoint(points[index].id, label), true);
+  }
+  points[1].style.showLabel = false;
+  assert.equal(document.nextAvailablePointLabel(), "D");
+  assert.equal(document.assignNextPointLabel(points[5].id), "D");
+  assert.equal(document.assignNextPointLabel(points[6].id), "F");
+  assert.equal(document.assignNextPointLabel(points[7].id), "G");
+  assert.equal(document.assignNextPointLabel(points[8].id), "I");
+  assert.equal(points[8].style.showLabel, true);
+});
+
+test("copying unnamed and named points preserves the on-demand naming contract", () => {
+  const document = new GeometryDocument();
+  const applicationSettings = { ...settings, autoNamePoints: false };
+  const unnamed = document.addFreePoint({ x: 0, y: 0 }, applicationSettings);
+  const unnamedCopy = document.duplicateObjects([unnamed.id], { x: 20, y: 0 })[0];
+  assert.equal(unnamedCopy.label, "");
+  assert.equal(unnamedCopy.style.showLabel, false);
+
+  assert.equal(document.assignNextPointLabel(unnamed.id), "A");
+  const namedCopy = document.duplicateObjects([unnamed.id], { x: 40, y: 0 })[0];
+  assert.equal(namedCopy.label, "B");
+  assert.equal(namedCopy.style.showLabel, true);
+  assert.equal(document.assignNextPointLabel(unnamedCopy.id), "C");
+
+  const sidebarNamed = document.addFreePoint({ x: 60, y: 0 }, applicationSettings);
+  assert.equal(document.renamePoint(sidebarNamed.id, "Q"), true);
+  assert.equal(sidebarNamed.style.showLabel, true);
+});
+
+test("initial point label placement prefers the reverse angle bisector", () => {
+  const unnamedSettings = { ...settings, autoNamePoints: false };
+  const document = new GeometryDocument();
+  const vertex = document.addFreePoint({ x: 0, y: 0 }, unnamedSettings);
+  const right = document.addFreePoint({ x: 80, y: 0 }, unnamedSettings);
+  const down = document.addFreePoint({ x: 0, y: 80 }, unnamedSettings);
+  document.addSegment(vertex.id, right.id, unnamedSettings);
+  document.addSegment(vertex.id, down.id, unnamedSettings);
+  document.assignNextPointLabel(vertex.id);
+  const offset = document.suggestPointLabelOffset(vertex.id, { baseRadius: 32, fontSize: 17 });
+  const width = 17 * 0.62;
+  const center = { x: offset.x + width / 2, y: offset.y - 17 * 0.32 };
+  close(Math.hypot(center.x, center.y), 32, 1e-6);
+  const outward = { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+  assert.ok((center.x * outward.x + center.y * outward.y) / 32 > 0.98);
 });
 
 test("nearby intersection branches can both be created despite point hit tolerance", () => {

@@ -54,13 +54,121 @@ export function escapeLatexText(value) {
   return Array.from(String(value ?? "")).map((character) => replacements[character] || character).join("");
 }
 
+const LATEX_MATH_SYMBOLS = Object.freeze({
+  "→": "\\rightarrow",
+  "⇒": "\\Rightarrow",
+  "½": "\\frac{1}{2}",
+  "∠": "\\angle",
+  "∟": "\\llcorner",
+  "°": "^{\\circ}",
+  "≤": "\\leq",
+  "≥": "\\geq",
+  "α": "\\alpha",
+  "β": "\\beta",
+  "γ": "\\gamma",
+  "δ": "\\delta",
+  "ε": "\\epsilon",
+  "ζ": "\\zeta",
+  "η": "\\eta",
+  "θ": "\\theta",
+  "ι": "\\iota",
+  "κ": "\\kappa",
+  "λ": "\\lambda",
+  "μ": "\\mu",
+  "ξ": "\\xi",
+  "ο": "\\mathrm{o}",
+  "π": "\\pi",
+  "ρ": "\\rho",
+  "σ": "\\sigma",
+  "τ": "\\tau",
+  "υ": "\\upsilon",
+  "φ": "\\phi",
+  "χ": "\\chi",
+  "ψ": "\\psi",
+  "ω": "\\omega",
+  "Γ": "\\Gamma",
+  "Δ": "\\Delta",
+  "Θ": "\\Theta",
+  "Λ": "\\Lambda",
+  "Ξ": "\\Xi",
+  "Π": "\\Pi",
+  "Σ": "\\Sigma",
+  "Υ": "\\Upsilon",
+  "Φ": "\\Phi",
+  "Ψ": "\\Psi",
+  "Ω": "\\Omega",
+  "ℓ": "\\ell",
+  "⊙": "\\odot",
+  "⌢": "\\frown",
+  "⟂": "\\perp",
+  "∥": "\\parallel",
+  "≅": "\\cong",
+  "∼": "\\sim",
+  "≠": "\\ne",
+  "±": "\\pm",
+  "×": "\\times",
+  "·": "\\cdot",
+  "∞": "\\infty",
+  "≈": "\\approx",
+  "∈": "\\in",
+  "∉": "\\notin",
+  "√": "\\surd",
+  "∴": "\\therefore",
+  "∵": "\\because",
+  "←": "\\leftarrow",
+  "↔": "\\leftrightarrow",
+});
+
+function formattedCharactersLatex(value) {
+  let result = "";
+  let plain = "";
+  const flush = () => {
+    result += escapeLatexText(plain);
+    plain = "";
+  };
+  for (const character of Array.from(String(value ?? ""))) {
+    const math = LATEX_MATH_SYMBOLS[character];
+    if (math) {
+      flush();
+      result += "\\ensuremath{" + math + "}";
+    } else plain += character;
+  }
+  flush();
+  return result;
+}
+
+function formattedSegmentLatex(segment) {
+  const escaped = formattedCharactersLatex(segment.text);
+  if (segment.script === "sub") return "\\textsubscript{" + escaped + "}";
+  if (segment.script === "super") return "\\textsuperscript{" + escaped + "}";
+  return escaped;
+}
+
 function formattedTextLatex(value, options = {}) {
-  return parseMathText(value, options).map((segment) => {
-    const escaped = escapeLatexText(segment.text);
-    if (segment.script === "sub") return "\\textsubscript{" + escaped + "}";
-    if (segment.script === "super") return "\\textsuperscript{" + escaped + "}";
-    return escaped;
-  }).join("");
+  const segments = parseMathText(value, options);
+  const result = [];
+  let index = 0;
+  while (index < segments.length) {
+    const segment = segments[index];
+    if (segment.decoration === "overline") {
+      const decorated = [];
+      while (index < segments.length && segments[index].decoration === "overline") {
+        decorated.push(formattedSegmentLatex(segments[index]));
+        index += 1;
+      }
+      result.push("\\ensuremath{\\overline{\\mbox{" + decorated.join("") + "}}}");
+      continue;
+    }
+    result.push(formattedSegmentLatex(segment));
+    index += 1;
+  }
+  return result.join("");
+}
+
+function hasUnmappedUnicodeText(value, options = {}) {
+  return Array.from(plainMathText(value, options)).some((character) =>
+    /[^\x00-\x7f]/.test(character) && !LATEX_MATH_SYMBOLS[character]
+  );
 }
 
 function pointLabelLatex(value) {
@@ -474,9 +582,9 @@ export function createTikzExport(documentModel, options = {}) {
         ];
         commands.push("\\filldraw[" + pointOptions.join(",") + "] " + coordinate(position)
           + " circle[radius=" + formatNumber(radius) + "cm];");
-        if (object.style?.showLabel !== false && object.label != null) {
+        if (object.style?.showLabel !== false && String(object.label || "").trim()) {
           const rawLabel = String(object.label).replace(/[\r\n]+/g, " ");
-          hasUnicodeText ||= /[^\x00-\x7f]/.test(plainMathText(rawLabel, { legacyBracketSubscript: true }));
+          hasUnicodeText ||= hasUnmappedUnicodeText(rawLabel, { legacyBracketSubscript: true });
           const offset = object.labelOffset || { x: 12, y: -12 };
           const labelPosition = { x: position.x + Number(offset.x || 0), y: position.y + Number(offset.y || 0) };
           if (isSafePoint(labelPosition)) {
@@ -507,7 +615,7 @@ export function createTikzExport(documentModel, options = {}) {
           continue;
         }
         const raw = String(content);
-        hasUnicodeText ||= /[^\x00-\x7f]/.test(plainMathText(raw, { enableScripts: true }));
+        hasUnicodeText ||= hasUnmappedUnicodeText(raw, { enableScripts: true });
         const color = colorFor(object.style?.color);
         const fontSize = Number(object.style?.fontSize) || 16;
         const fontSizePt = formatNumber(Math.max(5, Math.min(24, fontSize * scale * 28.4527)), 2);
@@ -551,6 +659,7 @@ export function createTikzExport(documentModel, options = {}) {
     "% This is a static snapshot of the current page and viewport.",
     "\\documentclass[tikz,border=4pt]{standalone}",
     "\\usepackage{xcolor}",
+    "\\usepackage{amsmath,amssymb}",
     ...(hasUnicodeText
       ? ["% Compile with XeLaTeX or LuaLaTeX for Unicode text.", "\\usepackage[UTF8]{ctex}"]
       : []),

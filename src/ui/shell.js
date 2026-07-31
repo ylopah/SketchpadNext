@@ -16,7 +16,6 @@ const SETTINGS_FIELDS = Object.freeze({
   settingsLineColor: ["lineColor", "value"],
   settingsLineDash: ["lineDash", "value"],
   settingsShowLabels: ["showLabels", "checked"],
-  settingsSnapToGrid: ["snapToGrid", "checked"],
   settingsGridSize: ["gridSize", "value"],
   settingsShortcutsEnabled: ["shortcutsEnabled", "checked"],
   settingsMeasurementDecimals: ["measurementDecimals", "value"],
@@ -24,9 +23,186 @@ const SETTINGS_FIELDS = Object.freeze({
   settingsPointLabelFontSize: ["pointLabelFontSize", "value"],
 });
 
+const COMMAND_MENU_IDS = Object.freeze([
+  "constructionMenu",
+  "measurementMenu",
+  "transformMenu",
+  "dataMenu",
+  "displayMenu",
+]);
+
+const INTERFACE_HELP_SECTION = Object.freeze({
+  id: "interface",
+  title: "界面与快速操作",
+  items: Object.freeze([
+    { title: "给点命名", description: "新建点默认不显示名称。选择文本工具后点击未命名点，会按当前空缺的字母顺序生成名称；再次点击可继续编辑。" },
+    { title: "悬停菜单", description: "使用桌面鼠标时，把光标停在画布上方的构造、度量等菜单即可展开；键盘和触屏设备仍可单击打开。" },
+    { title: "属性栏预览", description: "桌面端收起属性栏后，把光标移到窗口右侧的窄边缘可临时展开；移开后自动收回，单击“属性”可固定展开。" },
+  ]),
+});
+
+function enhanceCommandMenus(documentObject) {
+  const root = documentObject.documentElement;
+  const windowObject = documentObject.defaultView || globalThis.window;
+  const menus = [];
+  const isFineDesktop = () => root.dataset.device === "desktop" && root.dataset.input === "fine";
+
+  const closeMenu = (menu, { restoreFocus = false } = {}) => {
+    if (!menu?.open) return;
+    menu.open = false;
+    menu.wrapper.dataset.open = "false";
+    menu.trigger.setAttribute("aria-expanded", "false");
+    menu.popover.hidden = true;
+    if (restoreFocus) menu.trigger.focus();
+  };
+
+  const closeAll = (except = null) => {
+    for (const menu of menus) if (menu !== except) closeMenu(menu);
+  };
+
+  const openMenu = (menu, focus = null) => {
+    if (!menu || !isFineDesktop()) return;
+    closeAll(menu);
+    menu.open = true;
+    menu.wrapper.dataset.open = "true";
+    menu.trigger.setAttribute("aria-expanded", "true");
+    menu.popover.hidden = false;
+    if (focus === "first") menu.items.find((item) => !item.disabled)?.focus();
+    if (focus === "last") [...menu.items].reverse().find((item) => !item.disabled)?.focus();
+  };
+
+  const addOption = (menu, option, container) => {
+    if (!option.value) return;
+    const button = documentObject.createElement("button");
+    button.type = "button";
+    button.className = "command-menu-item";
+    button.setAttribute("role", "menuitem");
+    button.tabIndex = -1;
+    button.disabled = option.disabled;
+    button.textContent = option.textContent;
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      menu.select.value = option.value;
+      menu.select.dispatchEvent(new windowObject.Event("change", { bubbles: true }));
+      closeMenu(menu, { restoreFocus: true });
+    });
+    menu.items.push(button);
+    container.append(button);
+  };
+
+  for (const id of COMMAND_MENU_IDS) {
+    const select = documentObject.getElementById(id);
+    if (!select || select.dataset.enhanced === "true") continue;
+    select.dataset.enhanced = "true";
+
+    const wrapper = documentObject.createElement("div");
+    wrapper.className = "enhanced-command-menu";
+    wrapper.dataset.menuId = id;
+    wrapper.dataset.open = "false";
+    const trigger = documentObject.createElement("button");
+    const popover = documentObject.createElement("div");
+    const triggerId = `${id}EnhancedTrigger`;
+    const popoverId = `${id}EnhancedMenu`;
+    trigger.type = "button";
+    trigger.id = triggerId;
+    trigger.className = "command-menu-trigger";
+    trigger.textContent = select.options[0]?.textContent?.replace(/…+$/u, "") || select.getAttribute("aria-label") || "菜单";
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-controls", popoverId);
+    trigger.setAttribute("aria-expanded", "false");
+    popover.id = popoverId;
+    popover.className = "command-menu-popover";
+    popover.setAttribute("role", "menu");
+    popover.setAttribute("aria-labelledby", triggerId);
+    popover.hidden = true;
+
+    const menu = { select, wrapper, trigger, popover, items: [], open: false, openTimer: null, closeTimer: null };
+    for (const child of select.children) {
+      if (child.tagName === "OPTGROUP") {
+        const group = documentObject.createElement("section");
+        group.className = "command-menu-group";
+        group.setAttribute("role", "group");
+        const label = documentObject.createElement("span");
+        label.className = "command-menu-group-label";
+        label.textContent = child.label;
+        group.setAttribute("aria-label", child.label);
+        group.append(label);
+        for (const option of child.children) addOption(menu, option, group);
+        popover.append(group);
+      } else {
+        addOption(menu, child, popover);
+      }
+    }
+
+    trigger.addEventListener("click", () => {
+      if (menu.open) closeMenu(menu);
+      else openMenu(menu);
+    });
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      openMenu(menu, event.key === "ArrowDown" ? "first" : "last");
+    });
+    popover.addEventListener("keydown", (event) => {
+      const enabled = menu.items.filter((item) => !item.disabled);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMenu(menu, { restoreFocus: true });
+        return;
+      }
+      if (event.key === "Tab") {
+        closeMenu(menu);
+        return;
+      }
+      const current = enabled.indexOf(documentObject.activeElement);
+      let next = null;
+      if (event.key === "ArrowDown") next = enabled[(current + 1 + enabled.length) % enabled.length];
+      if (event.key === "ArrowUp") next = enabled[(current - 1 + enabled.length) % enabled.length];
+      if (event.key === "Home") next = enabled[0];
+      if (event.key === "End") next = enabled.at(-1);
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+    });
+    wrapper.addEventListener("pointerenter", (event) => {
+      if (!isFineDesktop() || event.pointerType === "touch") return;
+      windowObject.clearTimeout(menu.closeTimer);
+      menu.openTimer = windowObject.setTimeout(() => openMenu(menu), 90);
+    });
+    wrapper.addEventListener("pointerleave", (event) => {
+      if (!isFineDesktop() || event.pointerType === "touch") return;
+      windowObject.clearTimeout(menu.openTimer);
+      menu.closeTimer = windowObject.setTimeout(() => {
+        if (!wrapper.contains(documentObject.activeElement)) closeMenu(menu);
+      }, 180);
+    });
+    wrapper.addEventListener("focusout", () => {
+      windowObject.setTimeout(() => {
+        if (!wrapper.contains(documentObject.activeElement) && !wrapper.matches(":hover")) closeMenu(menu);
+      });
+    });
+
+    wrapper.append(trigger, popover);
+    select.insertAdjacentElement("afterend", wrapper);
+    menus.push(menu);
+  }
+
+  documentObject.addEventListener("pointerdown", (event) => {
+    if (!menus.some((menu) => menu.wrapper.contains(event.target))) closeAll();
+  });
+  documentObject.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeAll();
+  });
+  windowObject.addEventListener("sketchpadnext:layoutmodechange", () => {
+    if (!isFineDesktop()) closeAll();
+  });
+
+  return { closeAll };
+}
+
 function renderHelp(container, documentObject) {
   if (!container || container.childElementCount) return;
-  for (const section of HELP_SECTIONS) {
+  for (const section of [...HELP_SECTIONS, INTERFACE_HELP_SECTION]) {
     const article = documentObject.createElement("section");
     article.className = "help-section";
     article.id = `help-${section.id}`;
@@ -79,6 +255,7 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   documentObject.documentElement.dataset.shellPanelsReady = "true";
 
   const windowObject = documentObject.defaultView || globalThis.window;
+  const root = documentObject.documentElement;
   const environment = initializeClientEnvironment(documentObject, windowObject);
   const appShell = documentObject.querySelector(".app-shell");
   const helpDialog = documentObject.getElementById("helpDialog");
@@ -91,11 +268,21 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   const mobileActionsMenu = documentObject.getElementById("mobileActionsMenu");
   let lastTrigger = null;
   let inspectorTrigger = null;
+  let inspectorPreviewCloseTimer = null;
   const inspectorLayoutMode = (current) =>
     current?.device === "phone" ? `phone:${current.orientation}` : current?.device || "desktop";
   let currentInspectorLayoutMode = inspectorLayoutMode(environment.current);
 
   renderHelp(documentObject.getElementById("helpDialogContent"), documentObject);
+  const commandMenus = enhanceCommandMenus(documentObject);
+
+  const canPreviewInspector = () => root.dataset.device === "desktop" && root.dataset.input === "fine";
+  const setInspectorPreview = (open) => {
+    const shouldPreview = Boolean(open) && canPreviewInspector() && root.dataset.inspector === "closed";
+    root.dataset.inspectorPreview = shouldPreview ? "open" : "closed";
+    if (inspector) inspector.setAttribute("aria-hidden", String(!(shouldPreview || root.dataset.inspector !== "closed")));
+    return shouldPreview;
+  };
 
   const closeDialog = (dialog) => {
     if (!dialog || dialog.hidden) return;
@@ -120,7 +307,7 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
 
   const setInspectorOpen = (open, trigger = null, { restoreFocus = true } = {}) => {
     if (!inspector) return;
-    const root = documentObject.documentElement;
+    setInspectorPreview(false);
     const compactLayout = root.dataset.device !== "desktop";
     const shouldOpen = Boolean(open);
     root.dataset.inspector = shouldOpen ? "open" : "closed";
@@ -156,6 +343,23 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   });
   inspectorClose?.addEventListener("click", () => setInspectorOpen(false));
   inspectorBackdrop?.addEventListener("click", () => setInspectorOpen(false));
+  inspector?.addEventListener("pointerenter", (event) => {
+    if (event.pointerType === "touch") return;
+    windowObject.clearTimeout(inspectorPreviewCloseTimer);
+    setInspectorPreview(true);
+  });
+  inspector?.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "touch") return;
+    inspectorPreviewCloseTimer = windowObject.setTimeout(() => {
+      if (!inspector.contains(documentObject.activeElement)) setInspectorPreview(false);
+    }, 180);
+  });
+  inspector?.addEventListener("focusin", () => setInspectorPreview(true));
+  inspector?.addEventListener("focusout", () => {
+    windowObject.setTimeout(() => {
+      if (!inspector.contains(documentObject.activeElement) && !inspector.matches(":hover")) setInspectorPreview(false);
+    });
+  });
   documentObject.querySelectorAll("[data-proxy-button]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = documentObject.getElementById(button.dataset.proxyButton);
@@ -166,6 +370,9 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   documentObject.addEventListener("pointerdown", (event) => {
     if (mobileActionsMenu?.open && !mobileActionsMenu.contains(event.target)) {
       mobileActionsMenu.removeAttribute("open");
+    }
+    if (root.dataset.inspectorPreview === "open" && !inspector?.contains(event.target) && event.target !== inspectorToggle) {
+      setInspectorPreview(false);
     }
   });
   documentObject.querySelectorAll("[data-close-shell-dialog]").forEach((button) => {
@@ -183,6 +390,10 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
       event.preventDefault();
       event.stopImmediatePropagation();
       closeDialog(open);
+    } else if (root.dataset.inspectorPreview === "open") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setInspectorPreview(false);
     } else if (inspector?.dataset.mobileOpen === "true") {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -194,6 +405,7 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     const nextLayoutMode = inspectorLayoutMode(event.detail);
     if (nextLayoutMode === currentInspectorLayoutMode) return;
     currentInspectorLayoutMode = nextLayoutMode;
+    setInspectorPreview(false);
     setInspectorOpen(event.detail?.device === "desktop", null, { restoreFocus: false });
   });
 
@@ -229,6 +441,8 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     openInspector: (trigger) => setInspectorOpen(true, trigger),
     close: () => {
       [helpDialog, settingsDialog].forEach(closeDialog);
+      commandMenus?.closeAll();
+      setInspectorPreview(false);
       setInspectorOpen(false);
     },
     reset: () => {

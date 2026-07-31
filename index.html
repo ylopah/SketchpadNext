@@ -18,8 +18,10 @@
           </div>
         </div>
         <div class="document-title">
-          <input id="documentTitle" value="未命名画板" aria-label="画板名称" />
-          <span id="saveState" role="status" aria-live="polite">已保存到本地</span>
+          <div class="document-heading-row">
+            <input id="documentTitle" value="未命名画板" aria-label="画板名称" />
+            <span id="saveState" role="status" aria-live="polite">已保存到本地</span>
+          </div>
           <div class="page-controls" aria-label="画板页面">
             <select id="pageSelect" aria-label="当前页面"></select>
             <button id="addPageButton" type="button" title="新建页面" aria-label="新建页面">＋</button>
@@ -52,12 +54,10 @@
               <button id="mobileAddPageButton" type="button" data-proxy-button="addPageButton">新建页面</button>
               <button id="mobileRenamePageButton" type="button" data-proxy-button="renamePageButton">重命名页面</button>
               <button id="mobileDeletePageButton" type="button" data-proxy-button="deletePageButton">删除当前页面</button>
-              <button id="mobileShowHiddenButton" type="button" data-proxy-button="showHiddenButton" hidden>显示隐藏对象</button>
               <button type="button" data-proxy-button="helpButton">工具说明</button>
               <button type="button" data-proxy-button="settingsButton">设置</button>
             </div>
           </details>
-          <button id="showHiddenButton" class="quiet-button" hidden>显示隐藏</button>
           <input id="fileInput" type="file" accept=".spn,.json,application/x-sketchpadnext+json,application/json" hidden />
           <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
         </nav>
@@ -123,7 +123,7 @@
               <button id="undoButton" title="撤销 (Ctrl+Z)" aria-label="撤销" disabled>↶</button>
               <button id="redoButton" title="重做 (Ctrl+Y)" aria-label="重做" disabled>↷</button>
               <select id="constructionMenu" class="construction-menu" aria-label="按选择构造">
-                <option value="">构造…</option>
+                <option value="">构造</option>
                 <option value="segment">线段</option>
                 <option value="line">直线</option>
                 <option value="ray">射线</option>
@@ -147,7 +147,7 @@
                 <option value="locus">轨迹</option>
               </select>
               <select id="measurementMenu" class="construction-menu" aria-label="度量选中对象">
-                <option value="">度量…</option>
+                <option value="">度量</option>
                 <optgroup label="长度与角度">
                   <option value="distance">两点距离</option>
                   <option value="pointLineDistance">点到线的距离</option>
@@ -173,7 +173,7 @@
                 </optgroup>
               </select>
               <select id="transformMenu" class="construction-menu" aria-label="变换选中对象">
-                <option value="">变换…</option>
+                <option value="">变换</option>
                 <option value="markCenter">标记旋转/缩放中心</option>
                 <option value="markMirror">标记反射镜面</option>
                 <option value="translate">平移</option>
@@ -183,7 +183,7 @@
                 <option value="iterate">重复最近变换…</option>
               </select>
               <select id="dataMenu" class="construction-menu" aria-label="计算、坐标与函数绘图">
-                <option value="">计算与坐标…</option>
+                <option value="">计算与坐标</option>
                 <optgroup label="计算">
                   <option value="parameter">新建参数</option>
                   <option value="calculation">新建计算</option>
@@ -205,10 +205,9 @@
                 </optgroup>
               </select>
               <select id="displayMenu" class="construction-menu" aria-label="显示与对象管理">
-                <option value="">显示…</option>
+                <option value="">显示</option>
                 <option value="hide">隐藏选中对象</option>
                 <option value="showHidden">显示全部隐藏对象</option>
-                <option value="toggleLabels">显示/隐藏点标签</option>
                 <option value="lock">锁定选中对象</option>
                 <option value="unlock">解除锁定</option>
                 <option value="front">移到最前</option>
@@ -267,13 +266,13 @@
           <div class="inspector-heading">
             <div>
               <span class="eyebrow">属性检查器</span>
-              <h2 id="inspectorTitle">新建对象默认值</h2>
+              <h2 id="inspectorTitle">未选择对象</h2>
             </div>
-            <span id="selectionBadge" class="selection-badge">全局</span>
+            <span id="selectionBadge" class="selection-badge">未选择</span>
             <button id="inspectorCloseButton" class="inspector-close-button" type="button" aria-label="关闭属性面板">×</button>
           </div>
 
-          <section class="inspector-section">
+          <section id="pointStyleSection" class="inspector-section" hidden>
             <h3>点样式</h3>
             <label class="field-row">
               <span>点名称</span>
@@ -287,10 +286,10 @@
               <span>点颜色</span>
               <span class="color-field"><input id="pointColor" type="color" value="#000000" /><output id="pointColorValue">#000000</output></span>
             </label>
-            <label class="check-row"><input id="showLabels" type="checkbox" checked /><span id="showLabelsText">默认显示点标签</span></label>
+            <label class="check-row"><input id="showLabels" type="checkbox" checked /><span id="showLabelsText">显示点标签</span></label>
           </section>
 
-          <section class="inspector-section">
+          <section id="lineStyleSection" class="inspector-section" hidden>
             <h3>线与圆样式</h3>
             <label class="field-row">
               <span>线宽</span>
@@ -389,7 +388,7 @@
           </div>
           <button type="button" class="dialog-close-button" data-close-shell-dialog aria-label="关闭说明">×</button>
         </header>
-        <p class="dialog-lead">构造前先选对象通常更快；不确定选择条件时，可在这里查找对应工具。</p>
+        <p class="dialog-lead">构造前先选对象通常更快。桌面端可把光标停在命令菜单或收起的属性栏边缘快速展开；使用文本工具点击未命名点即可按顺序生成名称。</p>
         <div id="helpDialogContent" class="help-dialog-content"></div>
         <div class="app-dialog-actions">
           <button type="button" data-close-shell-dialog>关闭</button>
@@ -429,7 +428,6 @@
           <fieldset class="settings-group">
             <legend>交互与画布</legend>
             <label class="settings-check"><input id="settingsShortcutsEnabled" type="checkbox" /><span>启用 Alt+字母工具快捷键</span></label>
-            <label class="settings-check"><input id="settingsSnapToGrid" type="checkbox" /><span>启用吸附并显示吸附网格</span></label>
             <label><span>吸附网格间距</span><input id="settingsGridSize" type="number" min="5" max="100" step="1" /></label>
           </fieldset>
         </div>

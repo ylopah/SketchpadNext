@@ -15,7 +15,7 @@ import {
   normalizePreferences,
   savePreferences,
 } from "./core/preferences.js";
-import { parseMathText } from "./core/text-format.js";
+import { parseMathText, plainMathText } from "./core/text-format.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const AUTOSAVE_KEY = "sketchpad-next.autosave.v1";
@@ -99,7 +99,7 @@ const toolDescriptions = {
   angleBisector: "可先选两条共顶点边，或依次选择/点出：第一边点、顶点、第二边点",
   marker: "在角的顶点按下并向角内拖动；点击已有灰色标识可切换 1～4 道弧线",
   info: "点击对象查看类型、父对象和子对象；按住 Shift 可让信息保持显示",
-  text: "点击空白处输入文本；拖动文本调整位置，双击文本可再次编辑",
+  text: "点击未命名点按字母空缺命名；点击空白处输入文本，双击文本可再次编辑",
   circle: "先选圆心，再选圆上一点",
   threePointCircle: "依次选择三个不共线的点创建外接圆",
 };
@@ -107,12 +107,12 @@ const toolDescriptions = {
 const elements = Object.fromEntries([
   "geometryCanvas", "snapGridLayer", "traceLayer", "objectLayer", "previewLayer", "emptyState", "toast", "infoPanel",
   "documentTitle", "saveState", "mobileDocumentTitle", "mobileSaveState",
-  "newButton", "openButton", "saveButton", "saveAsButton", "copyLatexButton", "insertImageButton", "showHiddenButton", "fileInput", "imageInput",
+  "newButton", "openButton", "saveButton", "saveAsButton", "copyLatexButton", "insertImageButton", "fileInput", "imageInput",
   "pageSelect", "mobilePageSelect", "addPageButton", "renamePageButton", "deletePageButton",
-  "mobileAddPageButton", "mobileRenamePageButton", "mobileDeletePageButton", "mobileShowHiddenButton",
+  "mobileAddPageButton", "mobileRenamePageButton", "mobileDeletePageButton",
   "undoButton", "redoButton", "constructionMenu", "measurementMenu", "transformMenu", "dataMenu", "displayMenu", "deleteButton", "resetViewButton", "snapToggle", "toolHint",
   "statusTool", "statusSelection", "statusCoordinates", "statusCount",
-  "inspectorTitle", "selectionBadge", "pointSize", "pointSizeValue", "pointColor", "pointColorValue",
+  "inspectorTitle", "selectionBadge", "pointStyleSection", "lineStyleSection", "pointSize", "pointSizeValue", "pointColor", "pointColorValue",
   "pointName", "showLabels", "showLabelsText", "lineWidth", "lineWidthValue", "lineColor", "lineColorValue", "lineDash",
   "angleMarkSizeRow", "angleMarkSize", "angleMarkSizeValue", "applyStyleButton",
   "pathMarkKindRow", "pathMarkKind",
@@ -410,16 +410,31 @@ function createSvgElement(name, attributes = {}) {
   return element;
 }
 
+function appendFormattedSegment(element, segment) {
+  const attributes = segment.script === "normal" ? {} : {
+    "baseline-shift": segment.script,
+    "font-size": "70%",
+  };
+  const span = createSvgElement("tspan", attributes);
+  span.textContent = segment.text;
+  element.append(span);
+}
+
 function appendFormattedText(element, value, options = {}) {
   const segments = parseMathText(value, options);
-  for (const segment of segments) {
-    const attributes = segment.script === "normal" ? {} : {
-      "baseline-shift": segment.script,
-      "font-size": "70%",
-    };
-    const span = createSvgElement("tspan", attributes);
-    span.textContent = segment.text;
-    element.append(span);
+  let index = 0;
+  while (index < segments.length) {
+    if (segments[index].decoration === "overline") {
+      const decorated = createSvgElement("tspan", { "text-decoration": "overline" });
+      while (index < segments.length && segments[index].decoration === "overline") {
+        appendFormattedSegment(decorated, segments[index]);
+        index += 1;
+      }
+      element.append(decorated);
+      continue;
+    }
+    appendFormattedSegment(element, segments[index]);
+    index += 1;
   }
   if (!segments.length) element.textContent = " ";
 }
@@ -817,7 +832,7 @@ function renderPoint(object, layer = elements.objectLayer) {
     "data-object-id": object.id,
   });
   layer.append(point);
-  if (object.style?.showLabel !== false) {
+  if (object.style?.showLabel !== false && String(object.label || "").trim()) {
     const offset = object.labelOffset || {
       x: (object.style?.radius || settings.pointSize) + 6,
       y: -(object.style?.radius || settings.pointSize) - 4,
@@ -996,9 +1011,6 @@ function updateUiState() {
   elements.deleteButton.disabled = selectedIds.size === 0;
   elements.applyStyleButton.disabled = selectedIds.size === 0;
   elements.batchRenameButton.disabled = selectedObjects().filter((object) => object.type === "point").length < 2;
-  const hasHiddenObjects = documentModel.objects.some((object) => object.hidden);
-  elements.showHiddenButton.hidden = !hasHiddenObjects;
-  elements.mobileShowHiddenButton.hidden = !hasHiddenObjects;
   elements.statusTool.textContent = `${toolName(currentTool)}工具`;
   const selected = selectedId ? documentModel.getObject(selectedId) : null;
   const selection = selectedObjects();
@@ -1008,8 +1020,8 @@ function updateUiState() {
   elements.statusCount.textContent = `${documentModel.objects.length} 个对象`;
   elements.inspectorTitle.textContent = selection.length > 1
     ? `${selection.length} 个对象`
-    : selected ? objectDescription(selected) : "新建对象默认值";
-  elements.selectionBadge.textContent = selection.length ? "已选择" : "全局";
+    : selected ? objectDescription(selected) : "未选择对象";
+  elements.selectionBadge.textContent = selection.length ? "已选择" : "未选择";
   elements.toolHint.textContent = interactionHint();
   syncInspectorControls(selection);
 }
@@ -1023,10 +1035,11 @@ function toolName(tool) {
 }
 
 function objectDescription(object) {
-  if (object.type === "point") return `点 ${object.label}`;
+  if (object.type === "point") return `点 ${String(object.label || "").trim() || "（未命名）"}`;
   if (object.type === "text") return `文本“${object.content.slice(0, 12)}”`;
   if (object.type === "measurement") {
-    return documentModel.getMeasurementText(object, settings.measurementDecimals) || "度量值";
+    const text = documentModel.getMeasurementText(object, settings.measurementDecimals);
+    return text ? plainMathText(text, { enableScripts: true }) : "度量值";
   }
   if (object.type === "parameter") return `参数 ${object.name}`;
   if (object.type === "calculation") return `计算 ${object.name}`;
@@ -1404,6 +1417,26 @@ async function handleSinglePointerDown(event) {
   }
 
   if (currentTool === "text") {
+    const pointHit = documentModel.hitTestPoint(pointerWorld, selectionTolerance());
+    if (pointHit?.object.type === "point") {
+      const point = pointHit.object;
+      if (String(point.label || "").trim()) {
+        selectOnly(point.id);
+        showToast(`点 ${point.label} 已有名称，可在右侧属性中修改`);
+        render();
+      } else {
+        mutate(() => {
+          documentModel.assignNextPointLabel(point.id);
+          point.labelOffset = documentModel.suggestPointLabelOffset(point.id, {
+            baseRadius: 32,
+            fontSize: Number(point.style?.labelFontSize) || Number(settings.pointLabelFontSize) || 17,
+          });
+          selectOnly(point.id);
+        });
+        showToast(`已命名为 ${point.label}`);
+      }
+      return;
+    }
     const hit = documentModel.hitTest(pointerWorld, selectionTolerance());
     const existing = hit?.object.type === "text" ? hit.object : null;
     const content = await askUser(existing ? "编辑文本" : "输入文本", existing?.content || "", { title: existing ? "编辑文本" : "新建文本", multiline: true });
@@ -2408,7 +2441,6 @@ async function runDisplayCommand(command) {
   const ids = [...selectedIds];
   if (!ids.length) { showToast("请先选择对象"); return; }
   if (command === "hide") { hideSelection(); return; }
-  if (command === "toggleLabels") { toggleSelectedPointLabels(); return; }
   if (command === "lock" || command === "unlock") {
     mutate(() => documentModel.setObjectsLocked(ids, command === "lock"));
     showToast(command === "lock" ? "已锁定选中对象" : "已解除锁定");
@@ -3209,11 +3241,12 @@ function syncInspectorControls(selection = selectedObjects()) {
   const points = selection.filter((object) => object.type === "point");
   const shapes = selection.filter((object) => documentModel.isShape(object.id));
   const coloredObjects = selection.filter((object) => object.type !== "point" && object.type !== "image");
-  const hasSelection = selection.length > 0;
-  for (const control of [elements.pointSize, elements.pointColor, elements.showLabels]) control.disabled = hasSelection && points.length === 0;
-  for (const control of [elements.lineWidth, elements.lineDash]) control.disabled = hasSelection && shapes.length === 0;
-  elements.lineColor.disabled = hasSelection && coloredObjects.length === 0;
-  elements.showLabelsText.textContent = points.length ? "显示点标签" : "默认显示点标签";
+  elements.pointStyleSection.hidden = points.length === 0;
+  elements.lineStyleSection.hidden = shapes.length === 0 && coloredObjects.length === 0;
+  for (const control of [elements.pointSize, elements.pointColor, elements.showLabels]) control.disabled = points.length === 0;
+  for (const control of [elements.lineWidth, elements.lineDash]) control.disabled = shapes.length === 0;
+  elements.lineColor.disabled = coloredObjects.length === 0;
+  elements.showLabelsText.textContent = "显示点标签";
 
   const commonValue = (objects, getter) => {
     if (!objects.length) return null;
@@ -3243,7 +3276,10 @@ function syncInspectorControls(selection = selectedObjects()) {
   if (["measurement", "parameter", "calculation"].includes(object.type)) {
     elements.numericObjectSection.hidden = false;
     if (object.type === "measurement") {
-      elements.numericObjectDetails.textContent = documentModel.getMeasurementText(object, settings.measurementDecimals) || "当前度量无效";
+      const measurementText = documentModel.getMeasurementText(object, settings.measurementDecimals);
+      elements.numericObjectDetails.textContent = measurementText
+        ? plainMathText(measurementText, { enableScripts: true })
+        : "当前度量无效";
       elements.editNumericObjectButton.textContent = "度量由父对象动态决定";
       elements.editNumericObjectButton.disabled = true;
     } else {
@@ -3294,7 +3330,8 @@ function readSettingsControls(event) {
   const controlId = event?.target?.id;
   const isStyleControl = pointStyleControls.has(controlId) || shapeStyleControls.has(controlId);
   const selection = selectedObjects();
-  if (isStyleControl && selection.length) {
+  if (isStyleControl) {
+    if (!selection.length) { render(); return; }
     const targets = selection.filter((object) => {
       if (pointStyleControls.has(controlId)) return object.type === "point";
       if (controlId === "lineColor") return object.type !== "point" && object.type !== "image";
@@ -3318,14 +3355,7 @@ function readSettingsControls(event) {
     return;
   }
 
-  const settingPatch = controlId === "pointSize" ? { pointSize: Number(elements.pointSize.value) }
-    : controlId === "pointColor" ? { pointColor: elements.pointColor.value }
-      : controlId === "showLabels" ? { showLabels: elements.showLabels.checked }
-        : controlId === "lineWidth" ? { lineWidth: Number(elements.lineWidth.value) }
-          : controlId === "lineColor" ? { lineColor: elements.lineColor.value }
-            : controlId === "lineDash" ? { lineDash: elements.lineDash.value }
-              : controlId === "snapToggle" ? { snapToGrid: elements.snapToggle.checked }
-                : null;
+  const settingPatch = controlId === "snapToggle" ? { snapToGrid: elements.snapToggle.checked } : null;
   if (settingPatch) {
     settings = { ...settings, ...settingPatch };
     saveSettings();
@@ -3571,7 +3601,9 @@ function showToast(message, type = "info") {
 
 function objectReference(object) {
   if (!object) return "未知对象";
-  return object.type === "point" ? `点 ${object.label}` : `${objectDescription(object)} (${object.id})`;
+  return object.type === "point"
+    ? `点 ${String(object.label || "").trim() || "（未命名）"}`
+    : `${objectDescription(object)} (${object.id})`;
 }
 
 function showObjectInformation(object, persistent = false) {
@@ -3816,7 +3848,6 @@ elements.resetViewButton.addEventListener("click", () => {
 elements.saveButton.addEventListener("click", () => saveDocument());
 elements.saveAsButton.addEventListener("click", saveDocumentAs);
 elements.copyLatexButton.addEventListener("click", copyCurrentViewLatex);
-elements.showHiddenButton.addEventListener("click", showAllHidden);
 elements.openButton.addEventListener("click", openProject);
 elements.insertImageButton.addEventListener("click", () => elements.imageInput.click());
 elements.imageInput.addEventListener("change", async () => {
@@ -3959,8 +3990,8 @@ function commitPointNameEdit() {
   if (!point || point.type !== "point") { render(); return; }
   const label = elements.pointName.value.trim().slice(0, 12);
   if (!label) {
-    elements.pointName.value = originalLabel || point.label;
-    showToast("点名称不能为空，已保留原名称", "warning");
+    elements.pointName.value = originalLabel || "";
+    if (originalLabel) showToast("点名称不能为空，已保留原名称", "warning");
     render();
     return;
   }
