@@ -1,5 +1,8 @@
 const CONSTANTS = Object.freeze({ pi: Math.PI, e: Math.E });
 
+const toDegrees = (radians) => radians * 180 / Math.PI;
+const toRadians = (degrees) => degrees * Math.PI / 180;
+
 const FUNCTIONS = Object.freeze({
   sin: Math.sin,
   cos: Math.cos,
@@ -18,7 +21,21 @@ const FUNCTIONS = Object.freeze({
   trunc: Math.trunc,
   floor: Math.floor,
   ceil: Math.ceil,
+  sind: (degrees) => Math.sin(toRadians(degrees)),
+  cosd: (degrees) => Math.cos(toRadians(degrees)),
+  tand: (degrees) => Math.tan(toRadians(degrees)),
+  asind: (value) => toDegrees(Math.asin(value)),
+  acosd: (value) => toDegrees(Math.acos(value)),
+  atand: (value) => toDegrees(Math.atan(value)),
+  deg: toDegrees,
+  rad: toRadians,
+  min: Math.min,
+  max: Math.max,
+  atan2: Math.atan2,
+  mod: (dividend, divisor) => dividend % divisor,
 });
+
+const FUNCTION_ARITIES = Object.freeze({ min: 2, max: 2, atan2: 2, mod: 2 });
 
 function tokenize(source) {
   const tokens = [];
@@ -117,11 +134,22 @@ class Parser {
     const name = this.tokens[this.index++].value;
     if (this.current().type === "(") {
       this.index += 1;
-      const argument = this.additive();
+      const argumentsList = [];
+      if (this.current().type !== ")") {
+        argumentsList.push(this.additive());
+        while (this.current().type === ",") {
+          this.index += 1;
+          argumentsList.push(this.additive());
+        }
+      }
       this.consume(")");
       const fn = FUNCTIONS[name.toLowerCase()];
       if (!fn) throw new Error(`不支持的函数：${name}`);
-      return fn(argument);
+      const expectedArity = FUNCTION_ARITIES[name.toLowerCase()] || 1;
+      if (argumentsList.length !== expectedArity) {
+        throw new Error(`函数 ${name} 需要 ${expectedArity} 个参数，实际收到 ${argumentsList.length} 个`);
+      }
+      return fn(...argumentsList);
     }
     const lower = name.toLowerCase();
     if (Object.hasOwn(CONSTANTS, lower)) return CONSTANTS[lower];

@@ -117,6 +117,8 @@ const elements = Object.fromEntries([
   "angleMarkSizeRow", "angleMarkSize", "angleMarkSizeValue", "applyStyleButton",
   "pathMarkKindRow", "pathMarkKind",
   "angleMarkOpacityRow", "angleMarkOpacity", "angleMarkOpacityValue", "angleMarkDirectionRow", "angleMarkShowDirection", "angleMarkReverse", "batchRenameButton",
+  "numericObjectSection", "numericObjectDetails", "editNumericObjectButton",
+  "coordinateSystemSection", "coordinateUnitX", "coordinateUnitY", "coordinateGridType", "coordinateShowGrid", "coordinateShowTicks", "coordinateShowLabels", "applyCoordinateSystemButton",
   "inputDialog", "inputDialogForm", "inputDialogTitle", "inputDialogMessage", "inputDialogValue", "inputDialogCancel", "inputDialogConfirm",
 ].map((id) => [id, document.getElementById(id)]));
 const appShell = document.querySelector(".app-shell");
@@ -426,37 +428,70 @@ function clearLayer(layer) {
   while (layer.firstChild) layer.removeChild(layer.firstChild);
 }
 
+function niceCoordinateStep(minimum) {
+  const value = Math.max(Number.EPSILON, Number(minimum) || 1);
+  const power = 10 ** Math.floor(Math.log10(value));
+  const normalized = value / power;
+  const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return factor * power;
+}
+
+function coordinateAxisStep(unit, worldSpan, pixelSpan, targetCount = 24) {
+  const safeUnit = Math.max(Number.EPSILON, Math.abs(Number(unit) || 1));
+  const pixelsPerWorldUnit = Math.max(Number.EPSILON, Number(pixelSpan) / Math.max(Number.EPSILON, Number(worldSpan)));
+  return niceCoordinateStep(Math.max(
+    Math.abs(Number(worldSpan)) / safeUnit / targetCount,
+    44 / safeUnit / pixelsPerWorldUnit,
+  ));
+}
+
+function coordinateTickValues(minimum, maximum, initialStep, limit = 24) {
+  let step = Math.max(Number.EPSILON, Number(initialStep) || 1);
+  let startIndex;
+  let endIndex;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    startIndex = Math.ceil(minimum / step - 1e-10);
+    endIndex = Math.floor(maximum / step + 1e-10);
+    if (endIndex - startIndex + 1 <= limit) break;
+    step = niceCoordinateStep(step * 1.1);
+  }
+  const values = [];
+  for (let index = startIndex; index <= endIndex && values.length < limit; index += 1) values.push(index * step);
+  return { step, values };
+}
+
+function formatCoordinateTick(value) {
+  if (Math.abs(value) < 1e-10) return "0";
+  return String(Number(Number(value).toPrecision(10)));
+}
+
 function renderSnapGrid() {
   clearLayer(elements.snapGridLayer);
   if (!settings.snapToGrid) return;
-  const baseSpacing = Math.max(5, Number(settings.gridSize) || 20);
+  const coordinateObject = snapCoordinateSystem();
+  const coordinate = coordinateObject ? documentModel.getCoordinateSystem(coordinateObject) : null;
+  if (coordinate?.showGrid) return;
+  const baseSpacingX = coordinate ? Math.max(5, Number(coordinate.unitX) || 50) : Math.max(5, Number(settings.gridSize) || 20);
+  const baseSpacingY = coordinate ? Math.max(5, Number(coordinate.unitY) || baseSpacingX) : baseSpacingX;
+  const origin = coordinate?.origin || { x: 0, y: 0 };
   const rect = elements.geometryCanvas.getBoundingClientRect();
   const pixelsPerWorldUnit = rect.width > 0 ? rect.width / view.width : 1;
-  let spacing = baseSpacing;
-  while (spacing * pixelsPerWorldUnit < 12) spacing *= 2;
-  const startX = Math.ceil(view.x / spacing) * spacing;
+  let spacingX = baseSpacingX;
+  let spacingY = baseSpacingY;
+  while (spacingX * pixelsPerWorldUnit < 12) spacingX *= 2;
+  while (spacingY * pixelsPerWorldUnit < 12) spacingY *= 2;
+  const startX = origin.x + Math.ceil((view.x - origin.x) / spacingX) * spacingX;
+  const startY = origin.y + Math.ceil((view.y - origin.y) / spacingY) * spacingY;
   const endX = view.x + view.width;
-  const startY = Math.ceil(view.y / spacing) * spacing;
   const endY = view.y + view.height;
   const fragment = document.createDocumentFragment();
-  const isMajor = (value) => Math.abs(Math.round(value / baseSpacing)) % 5 === 0;
-  for (let x = startX; x <= endX + spacing * 0.01; x += spacing) {
-    fragment.append(createSvgElement("line", {
-      x1: x,
-      y1: view.y,
-      x2: x,
-      y2: endY,
-      class: `snap-grid-line${isMajor(x) ? " major" : ""}`,
-    }));
+  const isMajorX = (value) => Math.abs(Math.round((value - origin.x) / baseSpacingX)) % 5 === 0;
+  const isMajorY = (value) => Math.abs(Math.round((value - origin.y) / baseSpacingY)) % 5 === 0;
+  for (let x = startX; x <= endX + spacingX * 0.01; x += spacingX) {
+    fragment.append(createSvgElement("line", { x1: x, y1: view.y, x2: x, y2: endY, class: `snap-grid-line${isMajorX(x) ? " major" : ""}` }));
   }
-  for (let y = startY; y <= endY + spacing * 0.01; y += spacing) {
-    fragment.append(createSvgElement("line", {
-      x1: view.x,
-      y1: y,
-      x2: endX,
-      y2: y,
-      class: `snap-grid-line${isMajor(y) ? " major" : ""}`,
-    }));
+  for (let y = startY; y <= endY + spacingY * 0.01; y += spacingY) {
+    fragment.append(createSvgElement("line", { x1: view.x, y1: y, x2: endX, y2: y, class: `snap-grid-line${isMajorY(y) ? " major" : ""}` }));
   }
   elements.snapGridLayer.append(fragment);
 }
@@ -503,17 +538,27 @@ function renderShape(object, layer = elements.objectLayer) {
     const right = view.x + view.width;
     const top = view.y;
     const bottom = view.y + view.height;
+    const rect = elements.geometryCanvas.getBoundingClientRect();
+    const worldPerPixel = view.width / Math.max(1, rect.width);
+    const tickSize = 5 * worldPerPixel;
+    const labelSize = 12 * worldPerPixel;
+    const axisNameSize = 14 * worldPerPixel;
+    const xMinimum = (left - geometry.origin.x) / geometry.unitX;
+    const xMaximum = (right - geometry.origin.x) / geometry.unitX;
+    const yMinimum = (geometry.origin.y - bottom) / geometry.unitY;
+    const yMaximum = (geometry.origin.y - top) / geometry.unitY;
+    const xTicks = coordinateTickValues(xMinimum, xMaximum, coordinateAxisStep(geometry.unitX, view.width, rect.width));
+    const yTicks = coordinateTickValues(yMinimum, yMaximum, coordinateAxisStep(geometry.unitY, view.height, rect.height || rect.width));
     if (geometry.showGrid) {
       if (geometry.gridType === "polar") {
         const maximumRadius = Math.hypot(
           Math.max(Math.abs(left - geometry.origin.x), Math.abs(right - geometry.origin.x)),
           Math.max(Math.abs(top - geometry.origin.y), Math.abs(bottom - geometry.origin.y)),
         );
-        const circleCount = Math.min(120, Math.ceil(maximumRadius / geometry.unitX));
-        for (let index = 1; index <= circleCount; index += 1) {
-          gridGroup.append(createSvgElement("circle", {
-            cx: geometry.origin.x, cy: geometry.origin.y, r: index * geometry.unitX,
-          }));
+        const radialMaximum = maximumRadius / geometry.unitX;
+        const radialTicks = coordinateTickValues(Math.max(xTicks.step, Number.EPSILON), radialMaximum, xTicks.step, 32).values.filter((value) => value > 0);
+        for (const value of radialTicks) {
+          gridGroup.append(createSvgElement("circle", { cx: geometry.origin.x, cy: geometry.origin.y, r: value * geometry.unitX }));
         }
         for (let index = 0; index < 24; index += 1) {
           const angle = index * Math.PI / 12;
@@ -525,16 +570,12 @@ function renderShape(object, layer = elements.objectLayer) {
           }));
         }
       } else {
-        const startX = Math.floor((left - geometry.origin.x) / geometry.unitX);
-        const endX = Math.ceil((right - geometry.origin.x) / geometry.unitX);
-        const startY = Math.floor((top - geometry.origin.y) / geometry.unitY);
-        const endY = Math.ceil((bottom - geometry.origin.y) / geometry.unitY);
-        for (let index = startX; index <= endX && index - startX < 240; index += 1) {
-          const x = geometry.origin.x + index * geometry.unitX;
+        for (const value of xTicks.values) {
+          const x = geometry.origin.x + value * geometry.unitX;
           gridGroup.append(createSvgElement("line", { x1: x, y1: top, x2: x, y2: bottom }));
         }
-        for (let index = startY; index <= endY && index - startY < 240; index += 1) {
-          const y = geometry.origin.y + index * geometry.unitY;
+        for (const value of yTicks.values) {
+          const y = geometry.origin.y - value * geometry.unitY;
           gridGroup.append(createSvgElement("line", { x1: left, y1: y, x2: right, y2: y }));
         }
       }
@@ -543,10 +584,69 @@ function renderShape(object, layer = elements.objectLayer) {
       createSvgElement("line", { x1: left, y1: geometry.origin.y, x2: right, y2: geometry.origin.y }),
       createSvgElement("line", { x1: geometry.origin.x, y1: top, x2: geometry.origin.x, y2: bottom }),
     );
-    const originHit = createSvgElement("circle", {
-      cx: geometry.origin.x, cy: geometry.origin.y, r: 12,
-      class: "hit-target", "data-object-id": object.id,
-    });
+    const xAxisVisible = geometry.origin.y >= top && geometry.origin.y <= bottom;
+    const yAxisVisible = geometry.origin.x >= left && geometry.origin.x <= right;
+    const showTicks = geometry.showTicks !== false;
+    const showLabels = geometry.showLabels !== false;
+    if (showTicks && xAxisVisible) for (const value of xTicks.values) {
+      if (Math.abs(value) < 1e-10) continue;
+      const x = geometry.origin.x + value * geometry.unitX;
+      axisGroup.append(createSvgElement("line", { x1: x, y1: geometry.origin.y - tickSize, x2: x, y2: geometry.origin.y + tickSize }));
+    }
+    if (showTicks && yAxisVisible) for (const value of yTicks.values) {
+      if (Math.abs(value) < 1e-10) continue;
+      const y = geometry.origin.y - value * geometry.unitY;
+      axisGroup.append(createSvgElement("line", { x1: geometry.origin.x - tickSize, y1: y, x2: geometry.origin.x + tickSize, y2: y }));
+    }
+    if (showLabels && xAxisVisible) {
+      const labelsBelow = geometry.origin.y + tickSize + labelSize <= bottom;
+      for (const value of xTicks.values) {
+        if (Math.abs(value) < 1e-10) continue;
+        const label = createSvgElement("text", {
+          x: geometry.origin.x + value * geometry.unitX,
+          y: labelsBelow ? geometry.origin.y + tickSize + labelSize : geometry.origin.y - tickSize,
+          fill: "#475569", stroke: "none", "font-size": labelSize, "text-anchor": "middle", "pointer-events": "none",
+        });
+        label.textContent = formatCoordinateTick(value);
+        axisGroup.append(label);
+      }
+      const axisName = createSvgElement("text", {
+        x: right - axisNameSize * 0.7,
+        y: labelsBelow ? geometry.origin.y - tickSize : geometry.origin.y + tickSize + axisNameSize,
+        fill: "#334155", stroke: "none", "font-size": axisNameSize, "font-weight": "600", "text-anchor": "end", "pointer-events": "none",
+      });
+      axisName.textContent = "x";
+      axisGroup.append(axisName);
+    }
+    if (showLabels && yAxisVisible) {
+      const labelsLeft = geometry.origin.x - tickSize - labelSize * 2 >= left;
+      for (const value of yTicks.values) {
+        if (Math.abs(value) < 1e-10) continue;
+        const label = createSvgElement("text", {
+          x: labelsLeft ? geometry.origin.x - tickSize * 1.5 : geometry.origin.x + tickSize * 1.5,
+          y: geometry.origin.y - value * geometry.unitY + labelSize * 0.35,
+          fill: "#475569", stroke: "none", "font-size": labelSize,
+          "text-anchor": labelsLeft ? "end" : "start", "pointer-events": "none",
+        });
+        label.textContent = formatCoordinateTick(value);
+        axisGroup.append(label);
+      }
+      const axisName = createSvgElement("text", {
+        x: geometry.origin.x + tickSize * 1.5, y: top + axisNameSize,
+        fill: "#334155", stroke: "none", "font-size": axisNameSize, "font-weight": "600", "pointer-events": "none",
+      });
+      axisName.textContent = "y";
+      axisGroup.append(axisName);
+    }
+    if (showLabels && xAxisVisible && yAxisVisible) {
+      const originLabel = createSvgElement("text", {
+        x: geometry.origin.x - tickSize * 1.4, y: geometry.origin.y + labelSize * 1.25,
+        fill: "#475569", stroke: "none", "font-size": labelSize, "text-anchor": "end", "pointer-events": "none",
+      });
+      originLabel.textContent = "0";
+      axisGroup.append(originLabel);
+    }
+    const originHit = createSvgElement("circle", { cx: geometry.origin.x, cy: geometry.origin.y, r: 12, class: "hit-target", "data-object-id": object.id });
     group.append(gridGroup, axisGroup, originHit);
     layer.append(group);
     return;
@@ -746,7 +846,7 @@ function renderText(object, layer = elements.objectLayer) {
   const table = object.type === "table" ? documentModel.getTableData(object) : null;
   const content = object.type === "measurement"
     ? documentModel.getMeasurementText(object, settings.measurementDecimals) || "无效度量"
-    : ["parameter", "calculation"].includes(object.type) ? documentModel.getValueText(object) || "无效数值"
+    : ["parameter", "calculation"].includes(object.type) ? documentModel.getValueText(object, settings.measurementDecimals) || "无效数值"
       : table ? [table.headers.join("    "), ...table.rows.map((row) => row.join("    "))].join("\n")
         : object.type === "actionButton" ? object.label : object.content;
   if (object.type === "actionButton") {
@@ -1001,12 +1101,20 @@ function clientToWorld(event, snapToGrid = false) {
     { x: event.clientX, y: event.clientY },
   );
   if (snapToGrid && settings.snapToGrid && !event.altKey) {
-    const size = Number(settings.gridSize) || 20;
-    world = { x: Math.round(world.x / size) * size, y: Math.round(world.y / size) * size };
+    const coordinateObject = snapCoordinateSystem();
+    const coordinate = coordinateObject ? documentModel.getCoordinateSystem(coordinateObject) : null;
+    if (coordinate) {
+      world = {
+        x: coordinate.origin.x + Math.round((world.x - coordinate.origin.x) / coordinate.unitX) * coordinate.unitX,
+        y: coordinate.origin.y + Math.round((world.y - coordinate.origin.y) / coordinate.unitY) * coordinate.unitY,
+      };
+    } else {
+      const size = Number(settings.gridSize) || 20;
+      world = { x: Math.round(world.x / size) * size, y: Math.round(world.y / size) * size };
+    }
   }
   return world;
 }
-
 function captureCanvasPointer(pointerId) {
   try {
     if (!elements.geometryCanvas.hasPointerCapture(pointerId)) elements.geometryCanvas.setPointerCapture(pointerId);
@@ -2111,44 +2219,64 @@ function handleWheel(event) {
   scheduleRender();
 }
 
+function calculationFunctionHelp() {
+  return "sin cos tan asin acos atan sind cosd tand asind acosd atand sqrt abs ln log exp sgn sign round trunc floor ceil rad deg min max atan2 mod";
+}
+
+function numericVariableSummary(excludeId = null) {
+  return documentModel.objects
+    .filter((object) => object.id !== excludeId && ["parameter", "calculation", "measurement"].includes(object.type) && documentModel.getNumericValue(object) !== null)
+    .map((object) => `${object.type === "measurement" ? object.id.replace("obj-", "m") : object.name}=${documentModel.getNumericValue(object)}`)
+    .join("，");
+}
+
+async function editNumericObject(objectOrId) {
+  const object = typeof objectOrId === "string" ? documentModel.getObject(objectOrId) : objectOrId;
+  if (!object || !["parameter", "calculation"].includes(object.type)) return false;
+  if (object.type === "parameter") {
+    const value = await askUser(`修改参数 ${object.name}`, String(object.value), { title: "编辑参数" });
+    if (value == null) return false;
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) { showToast("参数值必须是有限数值", "warning"); return false; }
+    if (numericValue === Number(object.value)) return false;
+    let updated = false;
+    mutate(() => { updated = documentModel.setParameterValue(object.id, numericValue); if (updated) selectOnly(object.id); });
+    showToast(updated ? "参数已更新" : "无法更新参数", updated ? "info" : "warning");
+    return updated;
+  }
+  const name = await askUser("计算结果名称（英文字母开头）", object.name, { title: "编辑计算" });
+  if (name == null) return false;
+  const available = numericVariableSummary(object.id);
+  const expression = await askUser(`输入表达式。可用：${available || "pi、e"}\n函数：${calculationFunctionHelp()}`, object.expression, { title: "编辑计算", multiline: true });
+  if (expression == null) return false;
+  if (name.trim() === object.name && expression.trim() === object.expression) return false;
+  let updated = false;
+  mutate(() => { updated = documentModel.updateCalculation(object.id, name, expression); if (updated) selectOnly(object.id); });
+  showToast(updated ? "计算定义已更新" : "名称或表达式无效，请检查变量和函数", updated ? "info" : "warning");
+  return updated;
+}
+
 async function handleDoubleClick(event) {
   if (currentTool !== "select" || event.button !== 0) return;
   const labelPointId = event.target.closest?.("[data-label-for]")?.dataset.labelFor;
   if (labelPointId && documentModel.isPoint(labelPointId)) {
-    event.preventDefault();
-    selectOnly(labelPointId);
-    render();
-    requestAnimationFrame(() => {
-      elements.pointName.focus();
-      elements.pointName.select();
-    });
+    event.preventDefault(); selectOnly(labelPointId); render();
+    requestAnimationFrame(() => { elements.pointName.focus(); elements.pointName.select(); });
     return;
   }
   const position = clientToWorld(event);
   const directId = event.target.closest?.("[data-object-id]")?.dataset.objectId;
   const directObject = directId ? documentModel.getObject(directId) : null;
   const object = directObject || documentModel.hitTest(position, selectionTolerance())?.object;
-  if (!object || !["text", "parameter"].includes(object.type)) return;
+  if (!object || !["text", "parameter", "calculation"].includes(object.type)) return;
   event.preventDefault();
-  if (object.type === "parameter") {
-    const value = await askUser(`修改参数 ${object.name}`, String(object.value), { title: "参数" });
-    if (value == null || Number(value) === object.value || !Number.isFinite(Number(value))) return;
-    mutate(() => {
-      documentModel.setParameterValue(object.id, Number(value));
-      selectOnly(object.id);
-    });
-    return;
-  }
+  if (["parameter", "calculation"].includes(object.type)) { await editNumericObject(object); return; }
   const content = await askUser("编辑文本", object.content, { title: "编辑文本", multiline: true });
   if (content === null || content === object.content) return;
   const removedEmptyText = !content.trim();
-  mutate(() => {
-    documentModel.updateText(object.id, content);
-    selectOnly(documentModel.getObject(object.id) ? object.id : null);
-  });
+  mutate(() => { documentModel.updateText(object.id, content); selectOnly(documentModel.getObject(object.id) ? object.id : null); });
   if (removedEmptyText) showToast("空文本已删除，可用撤销恢复");
 }
-
 function deleteSelection() {
   if (cancelIncompleteConstruction()) {
     afterDocumentChange();
@@ -2682,65 +2810,62 @@ function measurementPosition(index = 0) {
 
 function runMeasurementCommand(kind) {
   const selection = selectedObjects();
+  const originalSelectionIds = selection.map((object) => object.id);
+  const originalPrimaryId = selectedId;
   const points = selection.filter((object) => object.type === "point");
   const segments = selection.filter((object) => object.type === "segment");
   const circles = selection.filter((object) => documentModel.getShapeGeometry(object)?.kind === "circle");
   const arcs = selection.filter((object) => documentModel.getShapeGeometry(object)?.kind === "arc");
   const lines = selection.filter((object) => documentModel.getShapeGeometry(object)?.kind === "line");
   const angleMarks = selection.filter((object) => object.type === "angleMark");
+  const selectedSystems = selection.filter((object) => object.type === "coordinateSystem");
   let groups = [];
   if (kind === "distance" && points.length === 2 && selection.length === 2) groups = [[points[0].id, points[1].id]];
-  else if (kind === "collinearity" && points.length === 3 && selection.length === 3) {
-    groups = [[points[0].id, points[1].id, points[2].id]];
-  }
+  else if (kind === "pointLineDistance" && points.length === 1 && lines.length === 1 && selection.length === 2) groups = [[points[0].id, lines[0].id]];
+  else if (["polygonArea", "polygonPerimeter"].includes(kind) && points.length >= 3 && points.length === selection.length) groups = [points.map((point) => point.id)];
+  else if (kind === "collinearity" && points.length === 3 && selection.length === 3) groups = [[points[0].id, points[1].id, points[2].id]];
   else if (kind === "length" && segments.length && segments.length === selection.length) groups = segments.map((segment) => [segment.id]);
   else if (kind === "arcLength" && arcs.length && arcs.length === selection.length) groups = arcs.map((arc) => [arc.id]);
   else if (kind === "ratio" && segments.length === 2 && selection.length === 2) groups = [[segments[0].id, segments[1].id]];
-  else if (kind === "angle" && angleMarks.length && angleMarks.length === selection.length) {
-    groups = angleMarks.map((mark) => [mark.id]);
-  }
-  else if (kind === "angle" && arcs.length && arcs.length === selection.length) {
-    groups = arcs.map((arc) => [arc.id]);
-  }
+  else if (kind === "angle" && angleMarks.length && angleMarks.length === selection.length) groups = angleMarks.map((mark) => [mark.id]);
+  else if (kind === "angle" && arcs.length && arcs.length === selection.length) groups = arcs.map((arc) => [arc.id]);
   else if (kind === "angle" && points.length === 3 && selection.length === 3) groups = [[points[0].id, points[1].id, points[2].id]];
   else if (kind === "angle" && lines.length === 2 && selection.length === 2) {
-    const commonId = [lines[0].pointAId, lines[0].pointBId]
-      .find((id) => id === lines[1].pointAId || id === lines[1].pointBId);
+    const commonId = [lines[0].pointAId, lines[0].pointBId].find((id) => id === lines[1].pointAId || id === lines[1].pointBId);
     const first = commonId ? otherDefiningPoint(lines[0], commonId) : null;
     const second = commonId ? otherDefiningPoint(lines[1], commonId) : null;
-    if (commonId && first && second) groups = [[first, commonId, second]];
-    else groups = [[lines[0].id, lines[1].id]];
-  } else if (["radius", "circumference", "circleArea"].includes(kind) && circles.length && circles.length === selection.length) {
-    groups = circles.map((circle) => [circle.id]);
-  } else if (kind === "coordinates" && points.length && points.length === selection.length) {
-    const system = activeCoordinateSystem();
+    groups = commonId && first && second ? [[first, commonId, second]] : [[lines[0].id, lines[1].id]];
+  } else if (["radius", "circumference", "circleArea"].includes(kind) && circles.length && circles.length === selection.length) groups = circles.map((circle) => [circle.id]);
+  else if (["coordinates", "coordinateX", "coordinateY"].includes(kind) && points.length && selectedSystems.length <= 1 && selection.length === points.length + selectedSystems.length) {
+    let system = selectedSystems[0] || null;
+    if (!system) {
+      const visibleSystems = documentModel.objects.filter((object) => object.type === "coordinateSystem" && !object.hidden);
+      if (visibleSystems.length > 1) { showToast("存在多个可见坐标系，请同时选中要使用的坐标系", "warning"); return; }
+      system = visibleSystems[0] || null;
+    }
     groups = points.map((point) => system ? [point.id, system.id] : [point.id]);
-  } else if (kind === "pointValue" && points.length && points.length === selection.length && points.every((point) => point.definition.kind === "on-shape")) {
-    groups = points.map((point) => [point.id]);
-  }
+  } else if (kind === "pointValue" && points.length && points.length === selection.length && points.every((point) => point.definition.kind === "on-shape")) groups = points.map((point) => [point.id]);
   else if (kind === "slope" && lines.length && lines.length === selection.length) groups = lines.map((line) => [line.id]);
   if (!groups.length) {
     const requirement = {
-      distance: "距离需要选择两个点", length: "长度需要选择一条或多条线段",
-      arcLength: "弧长需要选择一条或多条圆弧", ratio: "比值需要选择两条线段",
-      angle: "角度需要按顺序选择三个点、两条线、角标记或圆弧",
-      collinearity: "共线误差需要选择三个点", radius: "半径需要选择一个或多个圆",
-      circumference: "圆周长需要选择一个或多个圆", circleArea: "圆面积需要选择一个或多个圆",
-      coordinates: "坐标需要选择一个或多个点", pointValue: "路径参数需要选择路径上的点",
-      slope: "斜率需要选择一条或多条线",
+      distance: "距离需要选择两个点", pointLineDistance: "点到线距离需要恰好选择一个点和一条线",
+      polygonArea: "多边形面积需要按顶点顺序选择至少三个点", polygonPerimeter: "多边形周长需要按顶点顺序选择至少三个点",
+      length: "长度需要选择一条或多条线段", arcLength: "弧长需要选择一条或多条圆弧", ratio: "比值需要选择两条线段",
+      angle: "角度需要按顺序选择三个点、两条线、角标记或圆弧", collinearity: "共线误差需要选择三个点",
+      radius: "半径需要选择一个或多个圆", circumference: "圆周长需要选择一个或多个圆", circleArea: "圆面积需要选择一个或多个圆",
+      coordinates: "坐标需要选择一个或多个点，并可额外选择一个坐标系", coordinateX: "横坐标需要选择一个或多个点，并可额外选择一个坐标系",
+      coordinateY: "纵坐标需要选择一个或多个点，并可额外选择一个坐标系", pointValue: "路径参数需要选择路径上的点", slope: "斜率需要选择一条或多条线",
     }[kind] || "当前选择无法完成该度量";
     showToast(requirement, "warning");
     return;
   }
+  let created = [];
   mutate(() => {
-    const created = groups.map((parents, index) => documentModel.addMeasurement(
-      kind, parents, measurementPosition(index), settings,
-    )).filter(Boolean);
-    setSelection(created.map((item) => item.id), created.at(-1)?.id || null);
+    created = groups.map((parents, index) => documentModel.addMeasurement(kind, parents, measurementPosition(index), settings)).filter(Boolean);
+    setSelection(originalSelectionIds, originalPrimaryId);
   });
-  showToast(`已创建 ${groups.length} 个动态度量值`);
+  showToast(created.length ? `已创建 ${created.length} 个动态度量值` : "无法创建该度量", created.length ? "info" : "warning");
 }
-
 function createTransformedObject(object, kind, value) {
   return object.type === "point"
     ? kind === "translate" ? documentModel.addTranslatedPoint(object.id, value.dx, value.dy, settings)
@@ -2825,11 +2950,24 @@ async function runTransformCommand(command) {
   }
 }
 
-function activeCoordinateSystem() {
-  return selectedObjects().find((object) => object.type === "coordinateSystem") ||
-    [...documentModel.objects].reverse().find((object) => object.type === "coordinateSystem" && !object.hidden) || null;
+function coordinateSystemResolution() {
+  const selectedSystems = selectedObjects().filter((object) => object.type === "coordinateSystem" && !object.hidden);
+  const primary = selectedId ? documentModel.getObject(selectedId) : null;
+  if (primary?.type === "coordinateSystem" && !primary.hidden) return { system: primary, ambiguous: false, explicit: true };
+  if (selectedSystems.length === 1) return { system: selectedSystems[0], ambiguous: false, explicit: true };
+  if (selectedSystems.length > 1) return { system: null, ambiguous: true, explicit: true };
+  const visibleSystems = documentModel.objects.filter((object) => object.type === "coordinateSystem" && !object.hidden);
+  if (visibleSystems.length === 1) return { system: visibleSystems[0], ambiguous: false, explicit: false };
+  return { system: null, ambiguous: visibleSystems.length > 1, explicit: false };
 }
 
+function activeCoordinateSystem() {
+  return coordinateSystemResolution().system;
+}
+
+function snapCoordinateSystem() {
+  return coordinateSystemResolution().system;
+}
 function parseRange(input, fallbackMin, fallbackMax) {
   const [minimum, maximum] = String(input ?? "").split(/[,，\s]+/).map(Number);
   return Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum
@@ -2888,7 +3026,7 @@ async function runDataCommand(command) {
     const defaultName = `c${documentModel.objects.filter((object) => object.type === "calculation").length + 1}`;
     const name = await askUser("计算结果名称（英文字母开头）", defaultName, { title: "新建计算" });
     if (!name) return;
-    const expression = await askUser(`输入表达式。可用：${available || "pi、e"}\n函数：sin cos tan sqrt abs ln log round trunc`, "2*pi", { title: "新建计算", multiline: true });
+    const expression = await askUser(`输入表达式。可用：${available || "pi、e"}\n函数：${calculationFunctionHelp()}`, "2*pi", { title: "新建计算", multiline: true });
     if (!expression) return;
     const variables = {};
     for (const object of numericObjects) {
@@ -2908,25 +3046,37 @@ async function runDataCommand(command) {
   }
   if (command === "coordinateSystem") {
     const selectedPoint = selectedObjects().find((object) => object.type === "point");
-    const unit = Number(await askUser("每个坐标单位对应多少画布像素", "50", { title: "新建坐标系" }));
-    if (!Number.isFinite(unit) || unit < 10) { showToast("坐标单位至少为 10 像素"); return; }
-    const gridType = await askUser("网格类型：square / rectangular / polar", "square", { title: "新建坐标系" });
-    if (gridType == null) return;
+    const unitInput = await askUser("横轴与纵轴单位间距 unitX, unitY（画布像素）", "50, 50", { title: "新建坐标系" });
+    if (unitInput == null) return;
+    const unitParts = String(unitInput).split(/[,，\s]+/).filter(Boolean);
+    const unitX = Number(unitParts[0]);
+    let unitY = Number(unitParts[1] ?? unitParts[0]);
+    if (!Number.isFinite(unitX) || !Number.isFinite(unitY) || unitX < 10 || unitY < 10 || unitX > 500 || unitY > 500) { showToast("横纵轴单位间距必须是 10～500 的数值", "warning"); return; }
+    const gridInput = await askUser("网格类型：square / rectangular / polar", "square", { title: "新建坐标系" });
+    if (gridInput == null) return;
+    const gridType = String(gridInput).trim().toLowerCase();
+    if (!["square", "rectangular", "polar"].includes(gridType)) { showToast("网格类型只能是 square、rectangular 或 polar", "warning"); return; }
+    if (gridType !== "rectangular") unitY = unitX;
     const showGrid = await confirmUser("是否显示覆盖整个画布的坐标网格？\n选择“取消”只显示坐标轴。", { title: "坐标网格", confirmLabel: "显示网格", cancelLabel: "只显示坐标轴" });
     let created = null;
     mutate(() => {
       const origin = selectedPoint?.id || { x: view.x + view.width / 2, y: view.y + view.height / 2 };
-      created = documentModel.addCoordinateSystem(origin, settings, { unitX: unit, unitY: unit, gridType, showGrid });
+      created = documentModel.addCoordinateSystem(origin, settings, { unitX, unitY, gridType, showGrid, showTicks: true, showLabels: true });
       selectOnly(created?.id || null);
     });
     showToast(created ? "坐标系已创建" : "无法创建坐标系");
     return;
   }
   const systemObject = activeCoordinateSystem();
-  if (!systemObject) { showToast("请先通过“数据与绘图”创建坐标系"); return; }
+  if (!systemObject) {
+    const resolution = coordinateSystemResolution();
+    showToast(resolution.ambiguous ? "存在多个可见坐标系，请先选中要使用的坐标系" : "请先通过“数据与绘图”创建坐标系", "warning");
+    return;
+  }
   if (command === "toggleGrid") {
-    mutate(() => { systemObject.showGrid = !systemObject.showGrid; selectOnly(systemObject.id); });
-    showToast(systemObject.showGrid ? "已显示完整坐标网格" : "已隐藏坐标网格");
+    let updated = false;
+    mutate(() => { updated = documentModel.updateCoordinateSystem(systemObject.id, { showGrid: !systemObject.showGrid }); if (updated) selectOnly(systemObject.id); });
+    showToast(updated ? (systemObject.showGrid ? "已显示完整坐标网格" : "已隐藏坐标网格") : "无法修改坐标网格", updated ? "info" : "warning");
     return;
   }
   if (command === "plotPoint") {
@@ -3052,16 +3202,16 @@ function syncInspectorControls(selection = selectedObjects()) {
   elements.angleMarkDirectionRow.hidden = true;
   elements.angleMarkReverse.hidden = true;
   elements.pathMarkKindRow.hidden = true;
+  elements.numericObjectSection.hidden = true;
+  elements.coordinateSystemSection.hidden = true;
+  elements.editNumericObjectButton.disabled = true;
+  elements.applyCoordinateSystemButton.disabled = true;
   const points = selection.filter((object) => object.type === "point");
   const shapes = selection.filter((object) => documentModel.isShape(object.id));
   const coloredObjects = selection.filter((object) => object.type !== "point" && object.type !== "image");
   const hasSelection = selection.length > 0;
-  for (const control of [elements.pointSize, elements.pointColor, elements.showLabels]) {
-    control.disabled = hasSelection && points.length === 0;
-  }
-  for (const control of [elements.lineWidth, elements.lineDash]) {
-    control.disabled = hasSelection && shapes.length === 0;
-  }
+  for (const control of [elements.pointSize, elements.pointColor, elements.showLabels]) control.disabled = hasSelection && points.length === 0;
+  for (const control of [elements.lineWidth, elements.lineDash]) control.disabled = hasSelection && shapes.length === 0;
   elements.lineColor.disabled = hasSelection && coloredObjects.length === 0;
   elements.showLabelsText.textContent = points.length ? "显示点标签" : "默认显示点标签";
 
@@ -3090,6 +3240,33 @@ function syncInspectorControls(selection = selectedObjects()) {
 
   if (selection.length !== 1) return;
   const object = selection[0];
+  if (["measurement", "parameter", "calculation"].includes(object.type)) {
+    elements.numericObjectSection.hidden = false;
+    if (object.type === "measurement") {
+      elements.numericObjectDetails.textContent = documentModel.getMeasurementText(object, settings.measurementDecimals) || "当前度量无效";
+      elements.editNumericObjectButton.textContent = "度量由父对象动态决定";
+      elements.editNumericObjectButton.disabled = true;
+    } else {
+      const currentValue = documentModel.getValueText(object, settings.measurementDecimals) || "当前数值无效";
+      elements.numericObjectDetails.textContent = object.type === "calculation"
+        ? `${currentValue}；表达式：${object.expression}`
+        : `${currentValue}；双击或点击下方按钮修改数值`;
+      elements.editNumericObjectButton.textContent = object.type === "calculation" ? "编辑计算定义" : "编辑参数值";
+      elements.editNumericObjectButton.disabled = false;
+    }
+  }
+  if (object.type === "coordinateSystem") {
+    const coordinate = documentModel.getCoordinateSystem(object) || object;
+    elements.coordinateSystemSection.hidden = false;
+    elements.applyCoordinateSystemButton.disabled = false;
+    elements.coordinateUnitX.value = Number(coordinate.unitX) || 50;
+    elements.coordinateUnitY.value = Number(coordinate.unitY) || Number(coordinate.unitX) || 50;
+    elements.coordinateGridType.value = ["square", "rectangular", "polar"].includes(coordinate.gridType) ? coordinate.gridType : "square";
+    elements.coordinateShowGrid.checked = coordinate.showGrid === true;
+    elements.coordinateShowTicks.checked = coordinate.showTicks !== false;
+    elements.coordinateShowLabels.checked = coordinate.showLabels !== false;
+    syncCoordinateUnitMode();
+  }
   if (object.type === "point") {
     elements.pointName.disabled = false;
     if (!isEditingSelectedPointName || pointNameEditPointId !== object.id) elements.pointName.value = object.label;
@@ -3111,7 +3288,6 @@ function syncInspectorControls(selection = selectedObjects()) {
     }
   }
 }
-
 function readSettingsControls(event) {
   const pointStyleControls = new Set(["pointSize", "pointColor", "showLabels"]);
   const shapeStyleControls = new Set(["lineWidth", "lineColor", "lineDash"]);
@@ -3872,6 +4048,47 @@ elements.pathMarkKind.addEventListener("change", () => {
   if (!mark || mark.type !== "pathMark") return;
   mutate(() => documentModel.setPathMarkKind(mark.id, elements.pathMarkKind.value));
 });
+function syncCoordinateUnitMode() {
+  const linkedUnits = elements.coordinateGridType.value !== "rectangular";
+  elements.coordinateUnitY.disabled = linkedUnits;
+  if (linkedUnits) elements.coordinateUnitY.value = elements.coordinateUnitX.value;
+}
+
+function applyCoordinateSystemSettings() {
+  const object = selectedId ? documentModel.getObject(selectedId) : null;
+  if (object?.type !== "coordinateSystem") return;
+  const unitX = Number(elements.coordinateUnitX.value);
+  let unitY = Number(elements.coordinateUnitY.value);
+  const gridType = elements.coordinateGridType.value;
+  if (!["square", "rectangular", "polar"].includes(gridType)
+    || !Number.isFinite(unitX) || !Number.isFinite(unitY)
+    || unitX < 10 || unitY < 10 || unitX > 500 || unitY > 500) {
+    showToast("请检查坐标系类型和 10～500 的单位间距", "warning");
+    return;
+  }
+  if (gridType !== "rectangular") unitY = unitX;
+  let updated = false;
+  mutate(() => {
+    updated = documentModel.updateCoordinateSystem(object.id, {
+      unitX, unitY, gridType,
+      showGrid: elements.coordinateShowGrid.checked,
+      showTicks: elements.coordinateShowTicks.checked,
+      showLabels: elements.coordinateShowLabels.checked,
+    });
+    if (updated) selectOnly(object.id);
+  });
+  showToast(updated ? "坐标系设置已应用" : "坐标系设置无效", updated ? "info" : "warning");
+}
+
+elements.editNumericObjectButton.addEventListener("click", () => {
+  const object = selectedId ? documentModel.getObject(selectedId) : null;
+  if (["parameter", "calculation"].includes(object?.type)) editNumericObject(object);
+});
+elements.coordinateGridType.addEventListener("change", syncCoordinateUnitMode);
+elements.coordinateUnitX.addEventListener("input", () => {
+  if (elements.coordinateGridType.value !== "rectangular") elements.coordinateUnitY.value = elements.coordinateUnitX.value;
+});
+elements.applyCoordinateSystemButton.addEventListener("click", applyCoordinateSystemSettings);
 elements.applyStyleButton.addEventListener("click", applyStyleToSelection);
 elements.batchRenameButton.addEventListener("click", batchRenameSelectedPoints);
 elements.inputDialogForm.addEventListener("submit", (event) => {

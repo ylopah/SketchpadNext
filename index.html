@@ -148,18 +148,29 @@
               </select>
               <select id="measurementMenu" class="construction-menu" aria-label="度量选中对象">
                 <option value="">度量…</option>
-                <option value="distance">两点距离</option>
-                <option value="length">线段长度</option>
-                <option value="arcLength">弧长</option>
-                <option value="ratio">两线段比值</option>
-                <option value="angle">角度</option>
-                <option value="collinearity">三点共线误差</option>
-                <option value="radius">半径</option>
-                <option value="circumference">圆周长</option>
-                <option value="circleArea">圆面积</option>
-                <option value="coordinates">点坐标</option>
-                <option value="pointValue">路径点参数值</option>
-                <option value="slope">斜率</option>
+                <optgroup label="长度与角度">
+                  <option value="distance">两点距离</option>
+                  <option value="pointLineDistance">点到线的距离</option>
+                  <option value="length">线段长度</option>
+                  <option value="arcLength">弧长</option>
+                  <option value="ratio">两线段比值</option>
+                  <option value="angle">角度</option>
+                  <option value="slope">斜率</option>
+                  <option value="pointValue">路径点参数值</option>
+                </optgroup>
+                <optgroup label="面积与周长">
+                  <option value="polygonPerimeter">多边形周长</option>
+                  <option value="polygonArea">多边形面积</option>
+                  <option value="radius">半径</option>
+                  <option value="circumference">圆周长</option>
+                  <option value="circleArea">圆面积</option>
+                </optgroup>
+                <optgroup label="坐标与验证">
+                  <option value="coordinates">点坐标</option>
+                  <option value="coordinateX">横坐标 x</option>
+                  <option value="coordinateY">纵坐标 y</option>
+                  <option value="collinearity">三点共线误差</option>
+                </optgroup>
               </select>
               <select id="transformMenu" class="construction-menu" aria-label="变换选中对象">
                 <option value="">变换…</option>
@@ -171,21 +182,27 @@
                 <option value="reflect">反射</option>
                 <option value="iterate">重复最近变换…</option>
               </select>
-              <select id="dataMenu" class="construction-menu" aria-label="参数、计算与绘图">
-                <option value="">数据与绘图…</option>
-                <option value="parameter">新建参数</option>
-                <option value="calculation">新建计算</option>
-                <option value="coordinateSystem">新建坐标系</option>
-                <option value="toggleGrid">显示/隐藏坐标网格</option>
-                <option value="plotPoint">绘制点</option>
-                <option value="functionGraph">绘制函数</option>
-                <option value="inverseGraph">绘制 x=f(y)</option>
-                <option value="polarGraph">绘制极坐标 r=f(θ)</option>
-                <option value="derivative">绘制导函数</option>
-                <option value="parametricPlot">绘制参数曲线</option>
-                <option value="table">生成表格</option>
-                <option value="collectTable">采集表格数据</option>
-                <option value="animate">动画选中参数/路径点</option>
+              <select id="dataMenu" class="construction-menu" aria-label="计算、坐标与函数绘图">
+                <option value="">计算与坐标…</option>
+                <optgroup label="计算">
+                  <option value="parameter">新建参数</option>
+                  <option value="calculation">新建计算</option>
+                  <option value="table">生成表格</option>
+                  <option value="collectTable">采集表格数据</option>
+                  <option value="animate">动画选中参数/路径点</option>
+                </optgroup>
+                <optgroup label="坐标系">
+                  <option value="coordinateSystem">新建坐标系</option>
+                  <option value="toggleGrid">显示/隐藏坐标网格</option>
+                  <option value="plotPoint">绘制点</option>
+                </optgroup>
+                <optgroup label="函数绘图">
+                  <option value="functionGraph">绘制函数</option>
+                  <option value="inverseGraph">绘制 x=f(y)</option>
+                  <option value="polarGraph">绘制极坐标 r=f(θ)</option>
+                  <option value="derivative">绘制导函数</option>
+                  <option value="parametricPlot">绘制参数曲线</option>
+                </optgroup>
               </select>
               <select id="displayMenu" class="construction-menu" aria-label="显示与对象管理">
                 <option value="">显示…</option>
@@ -309,6 +326,42 @@
                 <option value="arrow">平行箭头</option>
               </select>
             </label>
+          </section>
+
+          <section id="numericObjectSection" class="inspector-section" hidden>
+            <h3>度量与计算</h3>
+            <p id="numericObjectDetails" class="inspector-note" role="status" aria-live="polite">选择度量、参数或计算结果后，可查看和编辑其定义。</p>
+            <button id="editNumericObjectButton" class="wide-button compact-button" type="button">编辑数值对象</button>
+          </section>
+
+          <section id="coordinateSystemSection" class="inspector-section" hidden>
+            <h3>坐标系</h3>
+            <label class="field-row">
+              <span>横轴单位间距</span>
+              <input id="coordinateUnitX" class="number-input" type="number" min="10" max="500" step="1" value="50" />
+            </label>
+            <label class="field-row">
+              <span>纵轴单位间距</span>
+              <input id="coordinateUnitY" class="number-input" type="number" min="10" max="500" step="1" value="50" />
+            </label>
+            <label class="field-row">
+              <span>网格类型</span>
+              <select id="coordinateGridType" class="select-input">
+                <option value="square">直角方格</option>
+                <option value="rectangular">矩形网格</option>
+                <option value="polar">极坐标网格</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="coordinateShowGrid" type="checkbox" /><span>显示坐标网格</span>
+            </label>
+            <label class="check-row">
+              <input id="coordinateShowTicks" type="checkbox" checked /><span>显示刻度线</span>
+            </label>
+            <label class="check-row">
+              <input id="coordinateShowLabels" type="checkbox" checked /><span>显示刻度数字</span>
+            </label>
+            <button id="applyCoordinateSystemButton" class="wide-button compact-button" type="button">应用坐标系设置</button>
           </section>
 
           <button id="batchRenameButton" class="wide-button" disabled>批量命名选中的点</button>

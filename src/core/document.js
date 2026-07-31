@@ -435,12 +435,67 @@ export class GeometryDocument {
     return object;
   }
 
+  updateCalculation(calculationId, name, expression, variables = null) {
+    const object = this.getObject(calculationId);
+    const identifier = validateIdentifier(name);
+    const source = String(expression ?? "").trim();
+    if (object?.type !== "calculation" || !identifier || !source) return false;
+    if (variables !== null && (!variables || typeof variables !== "object" || Array.isArray(variables))) {
+      return false;
+    }
+
+    const candidates = {
+      ...this.#expressionBindingCandidates({
+        includeMeasurements: true,
+        ownerId: object.id,
+      }),
+      ...(variables || {}),
+    };
+    const normalizedVariables = this.#bindExpressionVariables(
+      [source], candidates, [], object.id,
+    );
+    const candidate = {
+      ...object,
+      name: identifier,
+      expression: source,
+      variables: normalizedVariables,
+    };
+    if (this.getNumericValue(candidate) === null) return false;
+    Object.assign(object, { name: identifier, expression: source, variables: normalizedVariables });
+    return true;
+  }
+
   getMeasurementValue(measurementOrId) {
     const object = typeof measurementOrId === "string" ? this.getObject(measurementOrId) : measurementOrId;
     if (object?.type !== "measurement") return null;
     const points = object.parents.map((id) => this.getPointPosition(id));
     const shapes = object.parents.map((id) => this.getShapeGeometry(id));
     if (object.measurementKind === "distance" && points.length === 2 && points.every(Boolean)) return distance(points[0], points[1]);
+    if (object.measurementKind === "pointLineDistance" && object.parents.length === 2) {
+      const pointIndex = points.findIndex(Boolean);
+      const lineIndex = shapes.findIndex((shape) => shape?.kind === "line");
+      if (pointIndex < 0 || lineIndex < 0 || pointIndex === lineIndex) return null;
+      return projectPointToLine(
+        points[pointIndex],
+        shapes[lineIndex].a,
+        shapes[lineIndex].b,
+        shapes[lineIndex].segment === true,
+        shapes[lineIndex].ray === true,
+      ).distance;
+    }
+    if (["polygonArea", "polygonPerimeter"].includes(object.measurementKind)
+      && points.length >= 3
+      && points.every(Boolean)) {
+      if (object.measurementKind === "polygonArea") {
+        const twiceSignedArea = points.reduce((sum, point, index) => {
+          const next = points[(index + 1) % points.length];
+          return sum + point.x * next.y - next.x * point.y;
+        }, 0);
+        return Math.abs(twiceSignedArea) / 2;
+      }
+      return points.reduce((sum, point, index) =>
+        sum + distance(point, points[(index + 1) % points.length]), 0);
+    }
     if (object.measurementKind === "collinearity" && points.length === 3 && points.every(Boolean)) {
       const baseLength = distance(points[0], points[1]);
       if (baseLength <= EPSILON) return null;
@@ -488,6 +543,13 @@ export class GeometryDocument {
       if (object.measurementKind === "circumference") return Math.PI * 2 * shapes[0].radius;
       return Math.PI * shapes[0].radius * shapes[0].radius;
     }
+    if (["coordinateX", "coordinateY"].includes(object.measurementKind) && points[0]) {
+      const system = object.parents[1] ? this.getCoordinateSystem(object.parents[1]) : null;
+      if (object.measurementKind === "coordinateX") {
+        return system ? (points[0].x - system.origin.x) / system.unitX : points[0].x;
+      }
+      return system ? (system.origin.y - points[0].y) / system.unitY : points[0].y;
+    }
     if (object.measurementKind === "slope" && shapes[0]?.kind === "line") {
       const dx = shapes[0].b.x - shapes[0].a.x;
       return Math.abs(dx) <= EPSILON ? null : (shapes[0].b.y - shapes[0].a.y) / dx;
@@ -516,14 +578,16 @@ export class GeometryDocument {
     catch { return null; }
   }
 
-  getValueText(objectOrId) {
+  getValueText(objectOrId, decimalPlaces = 6) {
     const object = typeof objectOrId === "string" ? this.getObject(objectOrId) : objectOrId;
     if (!object || !["parameter", "calculation"].includes(object.type)) return null;
     const value = this.getNumericValue(object);
     if (value === null) return `${object.name} = 无效`;
+    const requestedDecimals = Number(decimalPlaces);
+    const decimals = Number.isFinite(requestedDecimals) ? Math.max(0, Math.min(10, Math.round(requestedDecimals))) : 6;
     const suffix = object.type === "parameter" && object.unit === "angle" ? "°"
       : object.type === "parameter" && object.unit === "distance" ? " px" : "";
-    return `${object.name} = ${Number(value.toFixed(6))}${suffix}`;
+    return `${object.name} = ${Number(value.toFixed(decimals))}${suffix}`;
   }
 
   addCoordinateSystem(origin, settings = {}, options = {}) {
@@ -536,7 +600,10 @@ export class GeometryDocument {
       id: this.#id(), type: "coordinateSystem", originPointId,
       origin: { x: Number(point.x), y: Number(point.y) }, unitX, unitY,
       gridType: ["square", "rectangular", "polar"].includes(options.gridType) ? options.gridType : "square",
-      showGrid: options.showGrid === true, style: defaultShapeStyle(settings),
+      showGrid: options.showGrid === true,
+      showTicks: options.showTicks !== false,
+      showLabels: options.showLabels !== false,
+      style: defaultShapeStyle(settings),
     };
     this.objects.push(object);
     return object;
@@ -547,7 +614,49 @@ export class GeometryDocument {
     if (object?.type !== "coordinateSystem") return null;
     const origin = object.originPointId ? this.getPointPosition(object.originPointId) : object.origin;
     if (!origin) return null;
-    return { origin, unitX: object.unitX, unitY: object.unitY, gridType: object.gridType, showGrid: object.showGrid };
+    return {
+      origin,
+      unitX: object.unitX,
+      unitY: object.unitY,
+      gridType: object.gridType,
+      showGrid: object.showGrid === true,
+      showTicks: object.showTicks !== false,
+      showLabels: object.showLabels !== false,
+    };
+  }
+
+  updateCoordinateSystem(systemId, patch = {}) {
+    const object = this.getObject(systemId);
+    if (object?.type !== "coordinateSystem" || !patch || typeof patch !== "object") return false;
+
+    const next = {};
+    for (const key of ["unitX", "unitY"]) {
+      if (!(key in patch)) continue;
+      const value = Number(patch[key]);
+      if (!Number.isFinite(value) || value < 10 || value > 500) return false;
+      next[key] = value;
+    }
+    if ("gridType" in patch) {
+      if (!["square", "rectangular", "polar"].includes(patch.gridType)) return false;
+      next.gridType = patch.gridType;
+    }
+    for (const key of ["showGrid", "showTicks", "showLabels"]) {
+      if (!(key in patch)) continue;
+      if (typeof patch[key] !== "boolean") return false;
+      next[key] = patch[key];
+    }
+
+    let nextOrigin = null;
+    if (!object.originPointId && ("x" in patch || "y" in patch)) {
+      const x = "x" in patch ? Number(patch.x) : Number(object.origin?.x);
+      const y = "y" in patch ? Number(patch.y) : Number(object.origin?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      nextOrigin = { x, y };
+    }
+
+    Object.assign(object, next);
+    if (nextOrigin) object.origin = nextOrigin;
+    return true;
   }
 
   #expressionBindingCandidates({ includeMeasurements = false, ownerId = null } = {}) {
@@ -801,6 +910,22 @@ export class GeometryDocument {
     if (object.measurementKind === "distance" && points.length === 2 && points.every(Boolean)) {
       return `距离 ${pointLabel(0)}${pointLabel(1)} = ${format(distance(points[0], points[1]))}`;
     }
+    if (object.measurementKind === "pointLineDistance" && object.parents.length === 2) {
+      const pointIndex = points.findIndex(Boolean);
+      const lineIndex = shapes.findIndex((shape) => shape?.kind === "line");
+      const value = this.getMeasurementValue(object);
+      if (pointIndex < 0 || lineIndex < 0 || pointIndex === lineIndex || value === null) return null;
+      return `\u70b9 ${pointLabel(pointIndex)} \u5230${this.getObjectName(parents[lineIndex])} \u7684\u8ddd\u79bb = ${format(value)}`;
+    }
+    if (["polygonArea", "polygonPerimeter"].includes(object.measurementKind)
+      && points.length >= 3
+      && points.every(Boolean)) {
+      const value = this.getMeasurementValue(object);
+      if (value === null) return null;
+      const polygonName = points.map((_, index) => pointLabel(index)).join("");
+      const quantity = object.measurementKind === "polygonArea" ? "\u9762\u79ef" : "\u5468\u957f";
+      return `\u591a\u8fb9\u5f62 ${polygonName} ${quantity} = ${format(value)}`;
+    }
     if (object.measurementKind === "collinearity" && points.length === 3 && points.every(Boolean)) {
       const value = this.getMeasurementValue(object);
       if (value === null) return null;
@@ -855,6 +980,12 @@ export class GeometryDocument {
         y: (system.origin.y - points[0].y) / system.unitY,
       } : points[0];
       return `点 ${pointLabel(0)} 坐标 = (${format(coordinates.x)}, ${format(coordinates.y)})`;
+    }
+    if (["coordinateX", "coordinateY"].includes(object.measurementKind) && points[0]) {
+      const value = this.getMeasurementValue(object);
+      if (value === null) return null;
+      const coordinateName = object.measurementKind === "coordinateX" ? "横坐标 x" : "纵坐标 y";
+      return `点 ${pointLabel(0)} ${coordinateName} = ${format(value)}`;
     }
     if (object.measurementKind === "slope" && shapes[0]?.kind === "line") {
       const dx = shapes[0].b.x - shapes[0].a.x;
