@@ -157,6 +157,8 @@ let angleMarkSizeEditSnapshot = null;
 let pointerWorld = { x: 0, y: 0 };
 let view = { x: 0, y: 0, width: 1200, height: 720 };
 let canvasAspect = null;
+let canvasPixelWidth = null;
+let canvasLayoutOrientation = null;
 let toastTimer = null;
 let infoTimer = null;
 const traceHistory = new Map();
@@ -983,7 +985,9 @@ function captureCanvasPointer(pointerId) {
 }
 
 function selectionTolerance() {
-  return 10 * (view.width / 1200);
+  const rect = elements.geometryCanvas.getBoundingClientRect();
+  const cssPixels = document.documentElement.dataset.input === "coarse" ? 18 : 10;
+  return cssPixels * view.width / Math.max(1, rect.width);
 }
 
 function constrainConstructionPosition(position, event) {
@@ -2948,10 +2952,18 @@ function redo() {
 
 function resetView() {
   const rect = elements.geometryCanvas.getBoundingClientRect();
-  const width = 1200;
+  const compactLayout = document.documentElement.dataset.device !== "desktop";
+  const width = compactLayout && rect.width > 0
+    ? Math.max(420, Math.min(1200, rect.width * 1.25))
+    : 1200;
   const height = rect.width > 0 ? width * rect.height / rect.width : 720;
+  const center = { x: 600, y: 360 };
   canvasAspect = rect.width > 0 ? rect.height / rect.width : height / width;
-  view = { x: 0, y: 0, width, height };
+  canvasPixelWidth = rect.width > 0 ? rect.width : null;
+  canvasLayoutOrientation = document.documentElement.dataset.orientation || null;
+  view = compactLayout
+    ? { x: center.x - width / 2, y: center.y - height / 2, width, height }
+    : { x: 0, y: 0, width, height };
   updateViewBox();
   render();
 }
@@ -3519,10 +3531,25 @@ new ResizeObserver(() => {
   const rect = elements.geometryCanvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return;
   const nextAspect = rect.height / rect.width;
-  if (canvasAspect !== null && Math.abs(nextAspect - canvasAspect) < 0.001) return;
+  const nextOrientation = document.documentElement.dataset.orientation
+    || (rect.width >= rect.height ? "landscape" : "portrait");
+  const compactLayout = document.documentElement.dataset.device !== "desktop";
+  const orientationChanged = canvasLayoutOrientation !== null
+    && nextOrientation !== canvasLayoutOrientation;
+  const nextWidth = compactLayout && orientationChanged && canvasPixelWidth > 0
+    ? Math.max(360, Math.min(1600, view.width * rect.width / canvasPixelWidth))
+    : view.width;
+  const aspectChanged = canvasAspect === null || Math.abs(nextAspect - canvasAspect) >= 0.001;
+  const widthChanged = Math.abs(nextWidth - view.width) >= 0.001;
+  canvasPixelWidth = rect.width;
+  canvasLayoutOrientation = nextOrientation;
+  if (!aspectChanged && !widthChanged) return;
+  const centerX = view.x + view.width / 2;
   const centerY = view.y + view.height / 2;
   canvasAspect = nextAspect;
+  view.width = nextWidth;
   view.height = view.width * nextAspect;
+  view.x = centerX - view.width / 2;
   view.y = centerY - view.height / 2;
   if (touchGesture?.phase === "pinch") {
     const first = activeTouchPoints.get(touchGesture.pointerIds[0]);

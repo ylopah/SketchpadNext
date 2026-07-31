@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>SketchpadNext · 动态几何画板</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -11,9 +11,10 @@
       <header class="topbar">
         <div class="brand" aria-label="SketchpadNext">
           <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <div>
+          <div class="brand-copy">
             <strong>Sketchpad<span>Next</span></strong>
             <small>动态几何工作台</small>
+            <span id="environmentBadge" class="environment-badge" role="status" aria-live="polite">检测设备…</span>
           </div>
         </div>
         <div class="document-title">
@@ -35,6 +36,18 @@
           <button id="insertImageButton" class="quiet-button">插入图片</button>
           <button id="helpButton" class="quiet-button" type="button" title="查看工具使用说明">说明</button>
           <button id="settingsButton" class="quiet-button" type="button" title="设置默认样式与全局选项">设置</button>
+          <details id="mobileActionsMenu" class="mobile-actions-menu">
+            <summary>更多</summary>
+            <div class="mobile-actions-popover" aria-label="更多文件操作">
+              <button type="button" data-proxy-button="newButton">新建画板</button>
+              <button type="button" data-proxy-button="openButton">打开工程</button>
+              <button type="button" data-proxy-button="saveAsButton">另存为</button>
+              <button type="button" data-proxy-button="copyLatexButton">复制 LaTeX</button>
+              <button type="button" data-proxy-button="insertImageButton">插入图片</button>
+              <button type="button" data-proxy-button="helpButton">工具说明</button>
+              <button type="button" data-proxy-button="settingsButton">设置</button>
+            </div>
+          </details>
           <button id="showHiddenButton" class="quiet-button" hidden>显示隐藏</button>
           <input id="fileInput" type="file" accept=".spn,.json,application/x-sketchpadnext+json,application/json" hidden />
           <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
@@ -189,6 +202,7 @@
             <div class="canvas-hint" id="toolHint" role="status" aria-live="polite">拖动点改变图形，滚轮缩放画布</div>
             <div class="view-actions">
               <label class="toggle-label"><input id="snapToggle" type="checkbox" /> 吸附与网格</label>
+              <button id="inspectorToggleButton" class="inspector-toggle-button" type="button" aria-controls="inspectorPanel" aria-expanded="false">属性</button>
               <button id="resetViewButton">适应画布</button>
             </div>
           </div>
@@ -222,13 +236,15 @@
           </footer>
         </section>
 
-        <aside class="inspector">
+        <button id="inspectorBackdrop" class="inspector-backdrop" type="button" aria-label="关闭属性面板" hidden></button>
+        <aside id="inspectorPanel" class="inspector">
           <div class="inspector-heading">
             <div>
               <span class="eyebrow">属性检查器</span>
               <h2 id="inspectorTitle">新建对象默认值</h2>
             </div>
             <span id="selectionBadge" class="selection-badge">全局</span>
+            <button id="inspectorCloseButton" class="inspector-close-button" type="button" aria-label="关闭属性面板">×</button>
           </div>
 
           <section class="inspector-section">

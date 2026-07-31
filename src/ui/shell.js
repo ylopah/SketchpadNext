@@ -1,4 +1,5 @@
 import { HELP_SECTIONS } from "../core/help.js";
+import { initializeClientEnvironment } from "../core/environment.js";
 import {
   DEFAULT_PREFERENCES,
   PREFERENCES_CHANGE_EVENT,
@@ -78,11 +79,18 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   documentObject.documentElement.dataset.shellPanelsReady = "true";
 
   const windowObject = documentObject.defaultView || globalThis.window;
+  const environment = initializeClientEnvironment(documentObject, windowObject);
   const appShell = documentObject.querySelector(".app-shell");
   const helpDialog = documentObject.getElementById("helpDialog");
   const settingsDialog = documentObject.getElementById("settingsDialog");
   const settingsForm = documentObject.getElementById("settingsForm");
+  const inspector = documentObject.getElementById("inspectorPanel");
+  const inspectorToggle = documentObject.getElementById("inspectorToggleButton");
+  const inspectorClose = documentObject.getElementById("inspectorCloseButton");
+  const inspectorBackdrop = documentObject.getElementById("inspectorBackdrop");
+  const mobileActionsMenu = documentObject.getElementById("mobileActionsMenu");
   let lastTrigger = null;
+  let inspectorTrigger = null;
 
   renderHelp(documentObject.getElementById("helpDialogContent"), documentObject);
 
@@ -107,8 +115,44 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     dialog.querySelector("button, input, select")?.focus();
   };
 
+  const setInspectorOpen = (open, trigger = null) => {
+    if (!inspector) return;
+    const compactLayout = documentObject.documentElement.dataset.device !== "desktop";
+    const shouldOpen = compactLayout && Boolean(open);
+    inspector.dataset.mobileOpen = String(shouldOpen);
+    inspector.setAttribute("aria-hidden", String(compactLayout && !shouldOpen));
+    inspectorToggle?.setAttribute("aria-expanded", String(shouldOpen));
+    if (inspectorBackdrop) inspectorBackdrop.hidden = !shouldOpen;
+    if (shouldOpen) {
+      inspectorTrigger = trigger || documentObject.activeElement;
+      inspectorClose?.focus?.();
+    } else if (inspectorTrigger) {
+      inspectorTrigger.focus?.();
+      inspectorTrigger = null;
+    }
+  };
+
+  setInspectorOpen(false);
+
   documentObject.getElementById("helpButton")?.addEventListener("click", (event) => openDialog(helpDialog, event.currentTarget));
   documentObject.getElementById("settingsButton")?.addEventListener("click", (event) => openDialog(settingsDialog, event.currentTarget));
+  inspectorToggle?.addEventListener("click", (event) => {
+    setInspectorOpen(inspector?.dataset.mobileOpen !== "true", event.currentTarget);
+  });
+  inspectorClose?.addEventListener("click", () => setInspectorOpen(false));
+  inspectorBackdrop?.addEventListener("click", () => setInspectorOpen(false));
+  documentObject.querySelectorAll("[data-proxy-button]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = documentObject.getElementById(button.dataset.proxyButton);
+      mobileActionsMenu?.removeAttribute("open");
+      target?.click();
+    });
+  });
+  documentObject.addEventListener("pointerdown", (event) => {
+    if (mobileActionsMenu?.open && !mobileActionsMenu.contains(event.target)) {
+      mobileActionsMenu.removeAttribute("open");
+    }
+  });
   documentObject.querySelectorAll("[data-close-shell-dialog]").forEach((button) => {
     button.addEventListener("click", () => closeDialog(button.closest(".shell-dialog")));
   });
@@ -124,8 +168,16 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
       event.preventDefault();
       event.stopImmediatePropagation();
       closeDialog(open);
+    } else if (inspector?.dataset.mobileOpen === "true") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setInspectorOpen(false);
     }
   }, true);
+
+  windowObject.addEventListener("sketchpadnext:layoutmodechange", () => {
+    setInspectorOpen(false);
+  });
 
   settingsForm?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -153,9 +205,14 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   });
 
   return {
+    environment,
     openHelp: (trigger) => openDialog(helpDialog, trigger),
     openSettings: (trigger) => openDialog(settingsDialog, trigger),
-    close: () => [helpDialog, settingsDialog].forEach(closeDialog),
+    openInspector: (trigger) => setInspectorOpen(true, trigger),
+    close: () => {
+      [helpDialog, settingsDialog].forEach(closeDialog);
+      setInspectorOpen(false);
+    },
     reset: () => {
       const preferences = resetPreferences(storage);
       setFormValues(documentObject, preferences);

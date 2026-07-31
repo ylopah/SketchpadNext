@@ -1,4 +1,4 @@
-> **核心包说明（2026-07-30）：** 本压缩包只交接 SketchpadNext 画板本体。experiments/、examples/、自动出题及证明实验和对应测试已主动排除。回归测试为 `tests/geometry.test.js` 与 `tests/preferences.test.js`。
+> **核心包说明（2026-07-30）：** 本压缩包只交接 SketchpadNext 画板本体。experiments/、examples/、自动出题及证明实验和对应测试已主动排除。回归测试为 tests/geometry.test.js、tests/preferences.test.js 与 tests/responsive.test.js。
 
 # SketchpadNext 开发交接说明
 
@@ -59,11 +59,12 @@ http://127.0.0.1:4173/
 npm.cmd test
 ```
 
-当前共有 **89 项自动测试**，最后一次交接前运行全部通过。测试文件为：
+当前共有 **97 项自动测试**，最后一次交接前运行全部通过。测试文件为：
 
 ```text
 tests/geometry.test.js
 tests/preferences.test.js
+tests/responsive.test.js
 ```
 
 测试覆盖：
@@ -107,6 +108,7 @@ SketchpadNext/
 ├─ 启动 SketchpadNext.cmd
 ├─ 启动 SketchpadNext.bat
 ├─ README.md
+├─ ROADMAP_IDEAS.md
 ├─ FEATURES.md
 ├─ GSP_MANUAL_PARITY.md
 ├─ DEVELOPMENT_HANDOFF.md
@@ -116,6 +118,7 @@ SketchpadNext/
 │  │  └─ shell.js
 │  └─ core/
 │     ├─ document.js
+│     ├─ environment.js
 │     ├─ expression.js
 │     ├─ geometry.js
 │     ├─ help.js
@@ -129,7 +132,8 @@ SketchpadNext/
 │  └─ 几何画板使用手册.pdf
 └─ tests/
    ├─ geometry.test.js
-   └─ preferences.test.js
+   ├─ preferences.test.js
+   └─ responsive.test.js
 ```
 
 文件职责：
@@ -206,6 +210,8 @@ SketchpadNext/
 
 详细清单以 `FEATURES.md` 为准；手册对照以 `GSP_MANUAL_PARITY.md` 为准。
 
+移动端已按 UA、视口方向和输入能力响应：手机竖屏使用底部滑动工具栏、横屏使用窄侧栏，平板使用属性抽屉；画布按实际像素宽度定标，顶部设备徽标可查看完整 UA。environment.js 负责环境识别，ROADMAP_IDEAS.md 记录大胆功能路线与风险边界。
+
 ## 7. 工程文件和保存语义
 
 可编辑工程扩展名为 `.spn`，内部是开放 JSON，包含全部页面、对象、样式和动态依赖。旧版单页面或多页面 `.json` 仍可打开。
@@ -268,7 +274,7 @@ sketchpad-next.files.v1
 
 这些不一定是错误，但接手者应知晓：
 
-- `src/app.js` 已超过十万字节，后续适合按渲染、交互、文件、菜单命令拆分；拆分要小步进行并保持 89 项测试。
+- `src/app.js` 已超过十万字节，后续适合按渲染、交互、文件、菜单命令拆分；拆分要小步进行并保持 97 项测试。
 - 当前自动测试主要覆盖核心模型和纯视图变换；已人工回归说明/设置弹窗、吸附网格同步、Alt 快捷键总开关、设置重载和控制台错误，文件选择、中文输入法实机与真实触屏设备仍应人工检查。
 - 文件句柄持久化依赖 Chromium 的 File System Access API 和 IndexedDB。
 - 两条没有明确角区域的线直接测角时，返回较小夹角；需要有方向或反角语义时，应先创建角标记再测量。
@@ -280,7 +286,7 @@ sketchpad-next.files.v1
 ## 10. 下一位开发者开始工作的建议顺序
 
 1. 解压后阅读本文件和三份项目说明。
-2. 运行 `npm.cmd test`，确认 89 项通过。
+2. 运行 `npm.cmd test`，确认 97 项通过。
 3. 双击 `SketchpadNext.html`，检查页面可操作。
 4. 人工检查以下链路：
    - 新建三点和过三点圆，确认出现动态圆心。

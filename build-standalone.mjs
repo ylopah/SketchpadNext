@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const read = (relativePath) => readFile(path.join(root, relativePath), "utf8");
 
-const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, textFormat, latex, preferences, help, shell, app] = await Promise.all([
+const [htmlSource, styles, geometry, expression, documentModel, history, view, selection, textFormat, latex, preferences, help, environment, shell, app] = await Promise.all([
   read("index.html"),
   read("styles.css"),
   read("src/core/geometry.js"),
@@ -18,6 +18,7 @@ const [htmlSource, styles, geometry, expression, documentModel, history, view, s
   read("src/core/latex.js"),
   read("src/core/preferences.js"),
   read("src/core/help.js"),
+  read("src/core/environment.js"),
   read("src/ui/shell.js"),
   read("src/app.js"),
 ]);
@@ -33,6 +34,7 @@ const moduleSources = JSON.stringify({
   latex,
   preferences,
   help,
+  environment,
   shell,
   app,
 }).replaceAll("<", "\\u003c");
@@ -61,9 +63,11 @@ const bootstrap = `    <script>
           .replaceAll("./text-format.js", textFormatUrl));
         const preferencesUrl = createModule(sources.preferences);
         const helpUrl = createModule(sources.help);
+        const environmentUrl = createModule(sources.environment);
         const shellUrl = createModule(sources.shell
           .replaceAll("../core/preferences.js", preferencesUrl)
-          .replaceAll("../core/help.js", helpUrl));
+          .replaceAll("../core/help.js", helpUrl)
+          .replaceAll("../core/environment.js", environmentUrl));
         const appUrl = createModule(sources.app
           .replaceAll("./core/document.js", documentUrl)
           .replaceAll("./core/history.js", historyUrl)
