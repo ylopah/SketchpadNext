@@ -62,6 +62,8 @@ test("application keeps calculation editing and coordinate snapping contracts", 
   assert.ok(appSource.includes(
     "coordinate.origin.y + Math.round((world.y - coordinate.origin.y) / coordinate.unitY) * coordinate.unitY",
   ));
+  assert.ok(appSource.includes("if (coordinate?.showGrid) return;"));
+  assert.ok(!appSource.includes("hasVisibleCoordinateGrid"));
   assert.ok(appSource.includes("存在多个可见坐标系，请同时选中要使用的坐标系"));
   assert.ok(appSource.includes("存在多个可见坐标系，请先选中要使用的坐标系"));
 });
