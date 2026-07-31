@@ -106,13 +106,15 @@ const toolDescriptions = {
 
 const elements = Object.fromEntries([
   "geometryCanvas", "snapGridLayer", "traceLayer", "objectLayer", "previewLayer", "emptyState", "toast", "infoPanel",
-  "documentTitle", "saveState", "newButton", "openButton", "saveButton", "saveAsButton", "copyLatexButton", "insertImageButton", "showHiddenButton", "fileInput", "imageInput",
-  "pageSelect", "addPageButton", "renamePageButton", "deletePageButton",
+  "documentTitle", "saveState", "mobileDocumentTitle", "mobileSaveState",
+  "newButton", "openButton", "saveButton", "saveAsButton", "copyLatexButton", "insertImageButton", "showHiddenButton", "fileInput", "imageInput",
+  "pageSelect", "mobilePageSelect", "addPageButton", "renamePageButton", "deletePageButton",
+  "mobileAddPageButton", "mobileRenamePageButton", "mobileDeletePageButton", "mobileShowHiddenButton",
   "undoButton", "redoButton", "constructionMenu", "measurementMenu", "transformMenu", "dataMenu", "displayMenu", "deleteButton", "resetViewButton", "snapToggle", "toolHint",
   "statusTool", "statusSelection", "statusCoordinates", "statusCount",
   "inspectorTitle", "selectionBadge", "pointSize", "pointSizeValue", "pointColor", "pointColorValue",
   "pointName", "showLabels", "showLabelsText", "lineWidth", "lineWidthValue", "lineColor", "lineColorValue", "lineDash",
-  "angleMarkSizeRow", "angleMarkSize", "angleMarkSizeValue", "applyStyleButton", "gridSize",
+  "angleMarkSizeRow", "angleMarkSize", "angleMarkSizeValue", "applyStyleButton",
   "pathMarkKindRow", "pathMarkKind",
   "angleMarkOpacityRow", "angleMarkOpacity", "angleMarkOpacityValue", "angleMarkDirectionRow", "angleMarkShowDirection", "angleMarkReverse", "batchRenameButton",
   "inputDialog", "inputDialogForm", "inputDialogTitle", "inputDialogMessage", "inputDialogValue", "inputDialogCancel", "inputDialogConfirm",
@@ -147,6 +149,7 @@ let marqueeState = null;
 let markerState = null;
 let doodleState = null;
 let pendingRenderFrame = null;
+let pendingPreviewFrame = null;
 let pathMarkDragState = null;
 let constructionDragState = null;
 let styleEditSnapshot = null;
@@ -271,16 +274,26 @@ function autosave() {
 
 function syncPageControls() {
   const signature = projectPages.map((page) => page.name).join("\u0000");
-  if (elements.pageSelect.dataset.signature !== signature) {
-    elements.pageSelect.replaceChildren(...projectPages.map((page, index) => {
-      const option = document.createElement("option");
-      option.value = String(index); option.textContent = page.name;
-      return option;
-    }));
-    elements.pageSelect.dataset.signature = signature;
+  for (const select of [elements.pageSelect, elements.mobilePageSelect]) {
+    if (select.dataset.signature !== signature) {
+      select.replaceChildren(...projectPages.map((page, index) => {
+        const option = document.createElement("option");
+        option.value = String(index); option.textContent = page.name;
+        return option;
+      }));
+      select.dataset.signature = signature;
+    }
+    select.value = String(activePageIndex);
   }
-  elements.pageSelect.value = String(activePageIndex);
-  elements.deletePageButton.disabled = projectPages.length <= 1;
+  const cannotDeletePage = projectPages.length <= 1;
+  elements.deletePageButton.disabled = cannotDeletePage;
+  elements.mobileDeletePageButton.disabled = cannotDeletePage;
+  if (document.activeElement !== elements.mobileDocumentTitle) {
+    elements.mobileDocumentTitle.value = elements.documentTitle.value || documentModel.title;
+  }
+  elements.mobileSaveState.textContent = elements.saveState.textContent;
+  elements.mobileSaveState.title = elements.saveState.title;
+  elements.mobileSaveState.classList.toggle("error", elements.saveState.classList.contains("error"));
 }
 
 function stopAllAnimations() {
@@ -453,6 +466,14 @@ function scheduleRender() {
   pendingRenderFrame = requestAnimationFrame(() => {
     pendingRenderFrame = null;
     render();
+  });
+}
+
+function schedulePreviewRender() {
+  if (pendingRenderFrame !== null || pendingPreviewFrame !== null) return;
+  pendingPreviewFrame = requestAnimationFrame(() => {
+    pendingPreviewFrame = null;
+    renderPreview();
   });
 }
 
@@ -820,14 +841,16 @@ function renderPreview() {
     }));
   } else {
     let endpoints = { x1: first.x, y1: first.y, x2: pointerWorld.x, y2: pointerWorld.y };
-    if (currentTool === "line") {
-      const dx = pointerWorld.x - first.x;
-      const dy = pointerWorld.y - first.y;
-      endpoints = { x1: first.x - dx * 1000, y1: first.y - dy * 1000, x2: first.x + dx * 1000, y2: first.y + dy * 1000 };
-    } else if (currentTool === "ray") {
-      const dx = pointerWorld.x - first.x;
-      const dy = pointerWorld.y - first.y;
-      endpoints = { x1: first.x, y1: first.y, x2: first.x + dx * 1000, y2: first.y + dy * 1000 };
+    if (currentTool === "line" || currentTool === "ray") {
+      const clipped = clipLineGeometryToView({
+        kind: "line",
+        a: first,
+        b: pointerWorld,
+        segment: false,
+        ray: currentTool === "ray",
+      }, view);
+      if (!clipped) return;
+      endpoints = { x1: clipped.a.x, y1: clipped.a.y, x2: clipped.b.x, y2: clipped.b.y };
     }
     elements.previewLayer.append(createSvgElement("line", {
       ...endpoints, stroke: "#ff9f1c", "stroke-width": 1.5, "stroke-dasharray": "6 5", "pointer-events": "none",
@@ -839,6 +862,10 @@ function render() {
   if (pendingRenderFrame !== null) {
     cancelAnimationFrame(pendingRenderFrame);
     pendingRenderFrame = null;
+  }
+  if (pendingPreviewFrame !== null) {
+    cancelAnimationFrame(pendingPreviewFrame);
+    pendingPreviewFrame = null;
   }
   renderSnapGrid();
   renderTraces();
@@ -869,7 +896,9 @@ function updateUiState() {
   elements.deleteButton.disabled = selectedIds.size === 0;
   elements.applyStyleButton.disabled = selectedIds.size === 0;
   elements.batchRenameButton.disabled = selectedObjects().filter((object) => object.type === "point").length < 2;
-  elements.showHiddenButton.hidden = !documentModel.objects.some((object) => object.hidden);
+  const hasHiddenObjects = documentModel.objects.some((object) => object.hidden);
+  elements.showHiddenButton.hidden = !hasHiddenObjects;
+  elements.mobileShowHiddenButton.hidden = !hasHiddenObjects;
   elements.statusTool.textContent = `${toolName(currentTool)}工具`;
   const selected = selectedId ? documentModel.getObject(selectedId) : null;
   const selection = selectedObjects();
@@ -1207,6 +1236,14 @@ function selectOrCreateIntersection(position, tolerance, requiredParentId = null
   if (!nearest) return false;
   if (requiredParentId && !nearest.parents.includes(requiredParentId)) return false;
 
+  const coincidentPoint = documentModel.findCoincidentPoint(nearest.position);
+  if (coincidentPoint) {
+    selectOnly(coincidentPoint.id);
+    showToast("已选中已有点");
+    render();
+    return true;
+  }
+
   const pointAtIntersection = documentModel.objects.find((object) => {
     if (object.type !== "point" || object.definition?.kind !== "intersection") return false;
     const parents = object.definition.parents || [];
@@ -1347,16 +1384,37 @@ async function handleSinglePointerDown(event) {
   }
 
   if (currentTool === "select") {
-    const labelPointId = event.target?.closest?.("[data-label-for]")?.getAttribute("data-label-for");
+    const labelElement = event.target?.closest?.("[data-label-for]");
+    const labelPointId = labelElement?.getAttribute("data-label-for");
     if (labelPointId && documentModel.isPoint(labelPointId)) {
       const point = documentModel.getObject(labelPointId);
+      const pointPosition = documentModel.getPointPosition(point);
+      const originalOffset = { ...(point.labelOffset || { x: 12, y: -12 }) };
+      const labelGeometry = { centerOffset: { x: 0, y: 0 }, halfDiagonal: 0 };
+      try {
+        const bounds = labelElement.getBBox();
+        if (pointPosition && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+          const anchor = {
+            x: pointPosition.x + originalOffset.x,
+            y: pointPosition.y + originalOffset.y,
+          };
+          labelGeometry.centerOffset = {
+            x: bounds.x + bounds.width / 2 - anchor.x,
+            y: bounds.y + bounds.height / 2 - anchor.y,
+          };
+          labelGeometry.halfDiagonal = Math.hypot(bounds.width, bounds.height) / 2;
+        }
+      } catch {
+        // Detached or not-yet-painted SVG text falls back to anchor-based limiting.
+      }
       selectOnly(labelPointId);
       dragState = {
         kind: "label",
         pointId: labelPointId,
         pointerId: event.pointerId,
         start: { ...pointerWorld },
-        originalOffset: { ...(point.labelOffset || { x: 12, y: -12 }) },
+        originalOffset,
+        labelGeometry,
         snapshot: documentModel.serialize(),
         changed: false,
       };
@@ -1557,7 +1615,7 @@ function handleSinglePointerMove(event) {
       documentModel.setPointLabelOffset(dragState.pointId, {
         x: dragState.originalOffset.x + delta.x,
         y: dragState.originalOffset.y + delta.y,
-      }, 32);
+      }, 32, dragState.labelGeometry);
       dragState.changed = Math.abs(delta.x) > 0.001 || Math.abs(delta.y) > 0.001;
     } else {
       const delta = { x: pointerWorld.x - dragState.last.x, y: pointerWorld.y - dragState.last.y };
@@ -1569,7 +1627,7 @@ function handleSinglePointerMove(event) {
   }
   if (markerState) {
     markerState.current = { ...pointerWorld };
-    renderPreview();
+    schedulePreviewRender();
     return;
   }
   if (pathMarkDragState) {
@@ -1589,7 +1647,7 @@ function handleSinglePointerMove(event) {
     const last = doodleState.points.at(-1);
     if (!last || Math.hypot(pointerWorld.x - last.x, pointerWorld.y - last.y) >= view.width / 600) {
       doodleState.points.push({ ...pointerWorld });
-      renderPreview();
+      schedulePreviewRender();
     }
     return;
   }
@@ -1599,15 +1657,15 @@ function handleSinglePointerMove(event) {
       constructionDragState.current.x - constructionDragState.start.x,
       constructionDragState.current.y - constructionDragState.start.y,
     ) > selectionTolerance();
-    renderPreview();
+    schedulePreviewRender();
     return;
   }
   if (marqueeState) {
     marqueeState.current = { ...pointerWorld };
-    renderPreview();
+    schedulePreviewRender();
     return;
   }
-  renderPreview();
+  schedulePreviewRender();
 }
 
 function handleSinglePointerUp(event) {
@@ -2486,7 +2544,6 @@ function constructTriangleObjectFromSelection(kind) {
         : kind === "orthocenter"
           ? documentModel.addOrthocenter(points[0].id, points[1].id, points[2].id, settings)
           : documentModel.addIncircle(points[0].id, points[1].id, points[2].id, settings);
-    if (created) selectOnly(created.id);
   });
   return Boolean(created);
 }
@@ -2980,7 +3037,6 @@ function syncSettingsControls() {
   elements.lineColorValue.value = settings.lineColor.toUpperCase();
   elements.lineDash.value = settings.lineDash;
   elements.snapToggle.checked = settings.snapToGrid;
-  elements.gridSize.value = settings.gridSize;
 }
 
 function syncInspectorControls(selection = selectedObjects()) {
@@ -3093,8 +3149,7 @@ function readSettingsControls(event) {
           : controlId === "lineColor" ? { lineColor: elements.lineColor.value }
             : controlId === "lineDash" ? { lineDash: elements.lineDash.value }
               : controlId === "snapToggle" ? { snapToGrid: elements.snapToggle.checked }
-                : controlId === "gridSize" ? { gridSize: Math.max(5, Number(elements.gridSize.value) || 20) }
-                  : null;
+                : null;
   if (settingPatch) {
     settings = { ...settings, ...settingPatch };
     saveSettings();
@@ -3647,12 +3702,39 @@ elements.newButton.addEventListener("click", async () => {
   resetView();
   afterDocumentChange();
 });
-elements.documentTitle.addEventListener("change", () => {
-  documentModel.title = elements.documentTitle.value.trim() || "未命名画板";
-  for (const page of projectPages) page.document.title = documentModel.title;
+function commitDocumentTitle(control, mirror) {
+  const title = control.value.trim() || "未命名画板";
+  control.value = title;
+  mirror.value = title;
+  documentModel.title = title;
+  for (const page of projectPages) page.document.title = title;
+  autosave();
+}
+
+elements.documentTitle.addEventListener("change", () =>
+  commitDocumentTitle(elements.documentTitle, elements.mobileDocumentTitle)
+);
+elements.mobileDocumentTitle.addEventListener("input", () => {
+  elements.documentTitle.value = elements.mobileDocumentTitle.value;
+  const title = elements.mobileDocumentTitle.value.trim();
+  if (!title) return;
+  documentModel.title = title;
+  for (const page of projectPages) page.document.title = title;
   autosave();
 });
+elements.mobileDocumentTitle.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  elements.mobileDocumentTitle.blur();
+});
+elements.mobileDocumentTitle.addEventListener("change", () =>
+  commitDocumentTitle(elements.mobileDocumentTitle, elements.documentTitle)
+);
 elements.pageSelect.addEventListener("change", () => loadPage(Number(elements.pageSelect.value)));
+elements.mobilePageSelect.addEventListener("change", () => {
+  loadPage(Number(elements.mobilePageSelect.value));
+  document.getElementById("mobileActionsMenu")?.removeAttribute("open");
+});
 elements.addPageButton.addEventListener("click", async () => {
   const name = await askUser("页面名称", `页面 ${projectPages.length + 1}`, { title: "新建页面" });
   if (!name?.trim()) return;
@@ -3684,7 +3766,7 @@ elements.deletePageButton.addEventListener("click", async () => {
   showToast("页面已删除");
 });
 
-for (const control of [elements.pointSize, elements.pointColor, elements.showLabels, elements.lineWidth, elements.lineColor, elements.lineDash, elements.snapToggle, elements.gridSize]) {
+for (const control of [elements.pointSize, elements.pointColor, elements.showLabels, elements.lineWidth, elements.lineColor, elements.lineDash, elements.snapToggle]) {
   control.addEventListener("input", readSettingsControls);
   control.addEventListener("change", readSettingsControls);
 }

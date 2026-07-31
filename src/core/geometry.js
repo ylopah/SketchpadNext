@@ -227,16 +227,28 @@ export function lineCircleIntersections(a, b, center, radius, segment = false, r
   const coefficientA = dot(direction, direction);
   if (coefficientA <= EPSILON || radius < 0) return [];
 
-  const coefficientB = 2 * dot(offset, direction);
-  const coefficientC = dot(offset, offset) - radius * radius;
-  let discriminant = coefficientB * coefficientB - 4 * coefficientA * coefficientC;
-  if (discriminant < -EPSILON) return [];
-  discriminant = Math.max(0, discriminant);
-  const root = Math.sqrt(discriminant);
-  const values = [
-    (-coefficientB - root) / (2 * coefficientA),
-    (-coefficientB + root) / (2 * coefficientA),
-  ];
+  // Use the closest point on the supporting line. The quadratic
+  // discriminant loses precision at tangency and made incircle tangency
+  // points flicker between zero, one and two results while dragging.
+  const closestParameter = -dot(offset, direction) / coefficientA;
+  const closestOffset = add(offset, scale(direction, closestParameter));
+  const closestDistanceSquared = dot(closestOffset, closestOffset);
+  const radiusSquared = radius * radius;
+  const gap = closestDistanceSquared - radiusSquared;
+  const gapTolerance = EPSILON * 64 * Math.max(
+    1,
+    radiusSquared,
+    closestDistanceSquared,
+  );
+  if (gap > gapTolerance) return [];
+  const values = Math.abs(gap) <= gapTolerance
+    ? [closestParameter]
+    : (() => {
+      const parameterOffset = Math.sqrt(
+        Math.max(0, radiusSquared - closestDistanceSquared) / coefficientA,
+      );
+      return [closestParameter - parameterOffset, closestParameter + parameterOffset];
+    })();
   const result = [];
   for (const t of values) {
     if (segment && (t < -EPSILON || t > 1 + EPSILON)) continue;

@@ -133,6 +133,27 @@ test("finds two line-circle intersections", () => {
   close(result[1].x, 5);
 });
 
+test("a very long near-circle line does not become a false tangent", () => {
+  assert.deepEqual(
+    lineCircleIntersections(
+      { x: -10000, y: 2 },
+      { x: 10000, y: 2 },
+      { x: 0, y: 0 },
+      1,
+    ),
+    [],
+  );
+  assert.equal(
+    lineCircleIntersections(
+      { x: -10000, y: 1 },
+      { x: 10000, y: 1 },
+      { x: 0, y: 0 },
+      1,
+    ).length,
+    1,
+  );
+});
+
 test("finds two circle-circle intersections", () => {
   const result = circleCircleIntersections({ x: 0, y: 0 }, 5, { x: 6, y: 0 }, 5);
   assert.equal(result.length, 2);
@@ -232,6 +253,26 @@ test("clicking near a crossing creates an exact dynamic intersection", () => {
   close(position.x, 50);
   close(position.y, 50);
 });
+
+test("a shared segment endpoint is reused instead of creating a duplicate intersection", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const b = document.addFreePoint({ x: 100, y: 0 }, settings);
+  const c = document.addFreePoint({ x: 100, y: 100 }, settings);
+  const first = document.addSegment(a.id, b.id, settings);
+  const second = document.addSegment(b.id, c.id, settings);
+
+  const result = document.addPointAt({ x: 112, y: 0 }, settings, 10);
+  assert.equal(result.snappedToIntersection, true);
+  assert.equal(result.created, false);
+  assert.equal(result.point.id, b.id);
+  assert.equal(document.objects.filter((object) => object.type === "point").length, 3);
+
+  const legacyDuplicate = document.addIntersectionPoint(first.id, second.id, 0, settings);
+  assert.equal(legacyDuplicate.definition.kind, "intersection");
+  assert.equal(document.findCoincidentPoint({ x: 100, y: 0 }).id, b.id);
+});
+
 
 test("rectangle selection finds points and crossing shapes", () => {
   const document = new GeometryDocument();
@@ -488,6 +529,17 @@ test("point labels can be renamed and moved within a bounded area", () => {
   document.setPointLabelOffset(point.id, { x: 200, y: 0 }, 64);
   close(point.labelOffset.x, 64);
   close(point.labelOffset.y, 0);
+
+  const labelGeometry = {
+    centerOffset: { x: 10, y: -5 },
+    halfDiagonal: 20,
+  };
+  document.setPointLabelOffset(point.id, { x: 200, y: 0 }, 32, labelGeometry);
+  const labelCenter = {
+    x: point.labelOffset.x + labelGeometry.centerOffset.x,
+    y: point.labelOffset.y + labelGeometry.centerOffset.y,
+  };
+  close(Math.hypot(labelCenter.x, labelCenter.y), 52);
 });
 
 test("point labels and canvas text support subscripts, superscripts and geometry symbols", () => {
@@ -516,7 +568,7 @@ test("point labels and canvas text support subscripts, superscripts and geometry
 test("point name editing is deferred until blur and label dragging uses the tighter bound", () => {
   const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
   assert.match(appSource, /function loadSettings\(\) \{\s*return loadPreferences\(\);/);
-  assert.match(appSource, /setPointLabelOffset\([\s\S]*?}, 32\);/);
+  assert.match(appSource, /setPointLabelOffset\([\s\S]*?}, 32, dragState\.labelGeometry\);/);
   assert.match(appSource, /pointName\.addEventListener\("blur", commitPointNameEdit\)/);
   assert.ok(appSource.includes("if (event.isComposing || event.keyCode === 229) return;"));
   assert.ok(appSource.includes('appendFormattedText(tspan, line || " ", { enableScripts: true });'));
@@ -1400,7 +1452,12 @@ test("triangle centers and incircle remain dynamic and serializable", () => {
   assert.deepEqual(document.getShapeGeometry(incircle), {
     kind: "circle", center: { x: 2, y: 2 }, radius: 2,
   });
-  assert.deepEqual(document.dependenciesOf(incircle), [a.id, b.id, c.id]);
+  const incircleCenter = document.getObject(incircle.centerPointId);
+  assert.equal(incircleCenter.definition.kind, "incenter");
+  assert.equal(incircleCenter.label, "圆心");
+  assert.equal(incircleCenter.style.showLabel, false);
+  assert.deepEqual(document.getPointPosition(incircleCenter), { x: 2, y: 2 });
+  assert.deepEqual(document.dependenciesOf(incircle), [a.id, b.id, c.id, incircleCenter.id]);
   assert.equal(document.getObjectName(incircle), "△ABC 的内切圆");
 
   document.movePoint(c.id, { x: 0, y: 6 });
@@ -1417,6 +1474,93 @@ test("triangle centers and incircle remain dynamic and serializable", () => {
   assert.equal(degenerate.addOrthocenter(...points.map((point) => point.id), settings), null);
   assert.equal(degenerate.addIncircle(...points.map((point) => point.id), settings), null);
   assert.equal(degenerate.nextLabel, 3);
+});
+
+test("automatic incircle centers copy, upgrade and delete with their circles", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const b = document.addFreePoint({ x: 6, y: 0 }, settings);
+  const c = document.addFreePoint({ x: 0, y: 8 }, settings);
+  const incircle = document.addIncircle(a.id, b.id, c.id, settings);
+  const [copy] = document.duplicateObjects([incircle.id], { x: 10, y: 10 });
+  const copiedCenterId = copy.centerPointId;
+  const copiedCenter = document.getObject(copiedCenterId);
+  assert.equal(copiedCenter.definition.kind, "incenter");
+  assert.equal(copiedCenter.label, "圆心");
+  assert.equal(copiedCenter.style.showLabel, false);
+  assert.equal(document.addFreePoint({ x: 30, y: 30 }, settings).label, "G");
+  document.renamePoint(copiedCenter.id, "I");
+  copiedCenter.style.showLabel = true;
+  document.removeWithDependents(copy.id);
+  assert.equal(document.getObject(copy.id), null);
+  assert.equal(document.getObject(copiedCenterId), null);
+
+  const saved = document.toJSON();
+  saved.objects = saved.objects.filter((object) => object.id !== incircle.centerPointId);
+  delete saved.objects.find((object) => object.id === incircle.id).centerPointId;
+  const restored = GeometryDocument.fromJSON(saved);
+  const restoredCircle = restored.getObject(incircle.id);
+  const restoredCenter = restored.getObject(restoredCircle.centerPointId);
+  assert.equal(restoredCenter.definition.kind, "incenter");
+  assert.equal(restoredCenter.style.showLabel, false);
+  restored.removeWithDependents(restoredCenter.id);
+  assert.equal(restored.getObject(restoredCenter.id), null);
+  assert.equal(restored.getObject(restoredCircle.id), null);
+});
+
+test("owned circle centers do not consume inferred point labels after renaming", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: 0, y: 0 }, settings);
+  const b = document.addFreePoint({ x: 6, y: 0 }, settings);
+  const c = document.addFreePoint({ x: 0, y: 8 }, settings);
+  const incircle = document.addIncircle(a.id, b.id, c.id, settings);
+  const center = document.getObject(incircle.centerPointId);
+  document.renamePoint(center.id, "I");
+  center.style.showLabel = true;
+  const saved = document.toJSON();
+  delete saved.nextLabel;
+  const restored = GeometryDocument.fromJSON(saved);
+  assert.equal(restored.addFreePoint({ x: 20, y: 20 }, settings).label, "D");
+});
+
+test("incircle side tangencies stay single and dynamic while vertices move", () => {
+  const document = new GeometryDocument();
+  const a = document.addFreePoint({ x: -400, y: -300 }, settings);
+  const b = document.addFreePoint({ x: 100, y: -200 }, settings);
+  const c = document.addFreePoint({ x: -200, y: 150 }, settings);
+  const sides = [
+    document.addSegment(a.id, b.id, settings),
+    document.addSegment(b.id, c.id, settings),
+    document.addSegment(c.id, a.id, settings),
+  ];
+  const incircle = document.addIncircle(a.id, b.id, c.id, settings);
+  const tangent = document.addIntersectionPoint(sides[0].id, incircle.id, 0, settings);
+  assert.ok(tangent);
+
+  const triangles = [
+    [{ x: -400, y: -300 }, { x: 100, y: -200 }, { x: -200, y: 150 }],
+    [{ x: -350, y: -260 }, { x: 160, y: -130 }, { x: -240, y: 210 }],
+    [{ x: -280, y: -340 }, { x: 220, y: -180 }, { x: -130, y: 260 }],
+  ];
+  for (const [nextA, nextB, nextC] of triangles) {
+    document.movePoint(a.id, nextA);
+    document.movePoint(b.id, nextB);
+    document.movePoint(c.id, nextC);
+    for (const side of sides) assert.equal(document.getIntersections(side.id, incircle.id).length, 1);
+    const position = document.getPointPosition(tangent);
+    assert.ok(position && Number.isFinite(position.x) && Number.isFinite(position.y));
+  }
+});
+
+test("triangle center commands retain the three-point selection and previews are frame-coalesced", () => {
+  const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
+  const triangleConstructor = appSource.match(
+    /function constructTriangleObjectFromSelection[\s\S]*?function constructCircleFromSelection/,
+  )?.[0] || "";
+  assert.doesNotMatch(triangleConstructor, /selectOnly\(/);
+  assert.match(appSource, /function schedulePreviewRender\(\)/);
+  assert.match(appSource, /pendingPreviewFrame = requestAnimationFrame/);
+  assert.match(appSource, /clipLineGeometryToView\(\{[\s\S]*?ray: currentTool === "ray"/);
 });
 
 test("two selected edges with one common endpoint define an angle bisector", () => {

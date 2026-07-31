@@ -39,11 +39,20 @@
           <details id="mobileActionsMenu" class="mobile-actions-menu">
             <summary>更多</summary>
             <div class="mobile-actions-popover" aria-label="更多文件操作">
+              <div class="mobile-project-controls">
+                <label><span>画板标题</span><input id="mobileDocumentTitle" type="text" maxlength="80" /></label>
+                <label><span>当前页面</span><select id="mobilePageSelect" aria-label="当前页面"></select></label>
+                <small id="mobileSaveState">本地自动保存已开启</small>
+              </div>
               <button type="button" data-proxy-button="newButton">新建画板</button>
               <button type="button" data-proxy-button="openButton">打开工程</button>
               <button type="button" data-proxy-button="saveAsButton">另存为</button>
               <button type="button" data-proxy-button="copyLatexButton">复制 LaTeX</button>
               <button type="button" data-proxy-button="insertImageButton">插入图片</button>
+              <button id="mobileAddPageButton" type="button" data-proxy-button="addPageButton">新建页面</button>
+              <button id="mobileRenamePageButton" type="button" data-proxy-button="renamePageButton">重命名页面</button>
+              <button id="mobileDeletePageButton" type="button" data-proxy-button="deletePageButton">删除当前页面</button>
+              <button id="mobileShowHiddenButton" type="button" data-proxy-button="showHiddenButton" hidden>显示隐藏对象</button>
               <button type="button" data-proxy-button="helpButton">工具说明</button>
               <button type="button" data-proxy-button="settingsButton">设置</button>
             </div>
@@ -304,12 +313,6 @@
 
           <button id="batchRenameButton" class="wide-button" disabled>批量命名选中的点</button>
           <button id="applyStyleButton" class="wide-button" disabled>应用到全部选中对象</button>
-
-          <section class="inspector-section compact-section">
-            <h3>画布</h3>
-            <label class="field-row"><span>吸附间距</span><input id="gridSize" class="number-input" type="number" min="5" max="100" step="5" value="20" /></label>
-            <p class="supporting-text">选中对象时，样式调整立即生效；未选择对象时，设置会作为新建对象的默认值并自动保存。</p>
-          </section>
 
           <div class="shortcut-card">
             <h3>快捷操作</h3>

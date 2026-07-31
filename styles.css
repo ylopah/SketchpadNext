@@ -196,8 +196,11 @@ button { color: inherit; }
   top: calc(100% + 8px);
   right: 0;
   display: grid;
-  width: 190px;
+  width: min(280px, calc(100vw - 16px));
   max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 62px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -212,8 +215,22 @@ button { color: inherit; }
   box-shadow: none;
 }
 .mobile-actions-popover button:hover { background: var(--panel-soft); }
+.mobile-project-controls {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 4px 5px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mobile-project-controls label { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.mobile-project-controls input,
+.mobile-project-controls select { min-width: 0; width: 100%; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font: inherit; }
+.mobile-project-controls small { color: var(--muted); font-size: 10px; }
+.mobile-project-controls small.error { color: var(--danger); }
 
 .workspace { display: grid; grid-template-columns: 84px minmax(0, 1fr) 286px; width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+html[data-device="desktop"][data-inspector="closed"] .workspace { grid-template-columns: 84px minmax(0, 1fr); }
+html[data-device="desktop"][data-inspector="closed"] .inspector { display: none; }
 
 .toolrail { background: #181d27; padding: 14px 10px; display: flex; flex-direction: column; align-items: stretch; gap: 5px; overflow-y: auto; }
 .tool-button { display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 57px; padding: 7px 4px; border: 0; border-radius: 9px; color: #b9c1ce; background: transparent; cursor: pointer; font-size: 10px; transition: .15s ease; }
@@ -238,7 +255,7 @@ button { color: inherit; }
 .canvas-hint { color: var(--muted); text-align: center; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 16px; }
 .toggle-label { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; cursor: pointer; }
 .toggle-label input, .check-row input { accent-color: var(--accent); }
-.inspector-toggle-button { display: none; }
+.inspector-toggle-button { display: inline-flex; align-items: center; justify-content: center; }
 
 .canvas-host { position: relative; min-height: 0; overflow: hidden; background: #fff; }
 #geometryCanvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }

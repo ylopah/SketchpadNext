@@ -91,6 +91,9 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   const mobileActionsMenu = documentObject.getElementById("mobileActionsMenu");
   let lastTrigger = null;
   let inspectorTrigger = null;
+  const inspectorLayoutMode = (current) =>
+    current?.device === "phone" ? `phone:${current.orientation}` : current?.device || "desktop";
+  let currentInspectorLayoutMode = inspectorLayoutMode(environment.current);
 
   renderHelp(documentObject.getElementById("helpDialogContent"), documentObject);
 
@@ -115,29 +118,41 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     dialog.querySelector("button, input, select")?.focus();
   };
 
-  const setInspectorOpen = (open, trigger = null) => {
+  const setInspectorOpen = (open, trigger = null, { restoreFocus = true } = {}) => {
     if (!inspector) return;
-    const compactLayout = documentObject.documentElement.dataset.device !== "desktop";
-    const shouldOpen = compactLayout && Boolean(open);
-    inspector.dataset.mobileOpen = String(shouldOpen);
-    inspector.setAttribute("aria-hidden", String(compactLayout && !shouldOpen));
+    const root = documentObject.documentElement;
+    const compactLayout = root.dataset.device !== "desktop";
+    const shouldOpen = Boolean(open);
+    root.dataset.inspector = shouldOpen ? "open" : "closed";
+    inspector.dataset.mobileOpen = String(compactLayout && shouldOpen);
+    inspector.setAttribute("aria-hidden", String(!shouldOpen));
     inspectorToggle?.setAttribute("aria-expanded", String(shouldOpen));
-    if (inspectorBackdrop) inspectorBackdrop.hidden = !shouldOpen;
-    if (shouldOpen) {
+    if (inspectorToggle) {
+      inspectorToggle.textContent = compactLayout || !shouldOpen ? "属性" : "收起属性";
+      inspectorToggle.title = shouldOpen ? "收起属性面板" : "展开属性面板";
+    }
+    if (inspectorBackdrop) inspectorBackdrop.hidden = !(compactLayout && shouldOpen);
+    if (compactLayout && shouldOpen) {
       inspectorTrigger = trigger || documentObject.activeElement;
       inspectorClose?.focus?.();
-    } else if (inspectorTrigger) {
+    } else if (compactLayout && inspectorTrigger && restoreFocus) {
       inspectorTrigger.focus?.();
+      inspectorTrigger = null;
+    } else {
       inspectorTrigger = null;
     }
   };
 
-  setInspectorOpen(false);
+  setInspectorOpen(environment.current.device === "desktop", null, { restoreFocus: false });
 
   documentObject.getElementById("helpButton")?.addEventListener("click", (event) => openDialog(helpDialog, event.currentTarget));
   documentObject.getElementById("settingsButton")?.addEventListener("click", (event) => openDialog(settingsDialog, event.currentTarget));
   inspectorToggle?.addEventListener("click", (event) => {
-    setInspectorOpen(inspector?.dataset.mobileOpen !== "true", event.currentTarget);
+    const compactLayout = documentObject.documentElement.dataset.device !== "desktop";
+    const isOpen = compactLayout
+      ? inspector?.dataset.mobileOpen === "true"
+      : documentObject.documentElement.dataset.inspector !== "closed";
+    setInspectorOpen(!isOpen, event.currentTarget);
   });
   inspectorClose?.addEventListener("click", () => setInspectorOpen(false));
   inspectorBackdrop?.addEventListener("click", () => setInspectorOpen(false));
@@ -175,8 +190,11 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     }
   }, true);
 
-  windowObject.addEventListener("sketchpadnext:layoutmodechange", () => {
-    setInspectorOpen(false);
+  windowObject.addEventListener("sketchpadnext:layoutmodechange", (event) => {
+    const nextLayoutMode = inspectorLayoutMode(event.detail);
+    if (nextLayoutMode === currentInspectorLayoutMode) return;
+    currentInspectorLayoutMode = nextLayoutMode;
+    setInspectorOpen(event.detail?.device === "desktop", null, { restoreFocus: false });
   });
 
   settingsForm?.addEventListener("submit", (event) => {

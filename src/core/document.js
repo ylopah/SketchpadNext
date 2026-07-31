@@ -46,11 +46,15 @@ function automaticCircumcenterPoint(id, parents, settings = {}) {
   };
 }
 
-function isAutomaticCircumcenter(point) {
-  return point?.type === "point"
-    && point.definition?.kind === "circumcenter"
-    && point.label === "圆心"
-    && point.style?.showLabel === false;
+function automaticIncircleCenterPoint(id, parents, settings = {}) {
+  return {
+    id,
+    type: "point",
+    definition: { kind: "incenter", parents: [...parents] },
+    label: "圆心",
+    labelOffset: { x: 12, y: -12 },
+    style: { ...defaultPointStyle(settings), showLabel: false },
+  };
 }
 
 function defaultShapeStyle(settings) {
@@ -137,11 +141,14 @@ export class GeometryDocument {
   #upgradeLegacyObjects() {
     const additions = [];
     for (const object of this.objects) {
-      if (object.type !== "threePointCircle" || object.centerPointId) continue;
-      const center = automaticCircumcenterPoint(
-        this.#id(),
-        [object.pointAId, object.pointBId, object.pointCId],
-      );
+      if (object.centerPointId) continue;
+      const parents = [object.pointAId, object.pointBId, object.pointCId];
+      const center = object.type === "threePointCircle"
+        ? automaticCircumcenterPoint(this.#id(), parents)
+        : object.type === "incircle"
+          ? automaticIncircleCenterPoint(this.#id(), parents)
+          : null;
+      if (!center) continue;
       object.centerPointId = center.id;
       additions.push(center);
     }
@@ -192,7 +199,12 @@ export class GeometryDocument {
   }
 
   #inferNextLabel() {
-    return this.objects.filter((object) => object.type === "point" && !isAutomaticCircumcenter(object)).length;
+    const ownedCenterIds = new Set(this.objects
+      .filter((object) => ["threePointCircle", "incircle"].includes(object.type) && object.centerPointId)
+      .map((object) => object.centerPointId));
+    return this.objects.filter((object) =>
+      object.type === "point" && !ownedCenterIds.has(object.id)
+    ).length;
   }
 
   #validate() {
@@ -946,15 +958,17 @@ export class GeometryDocument {
     if (new Set(ids).size !== 3 || ids.some((id) => !this.isPoint(id))) return null;
     const positions = ids.map((id) => this.getPointPosition(id));
     if (positions.some((position) => !position) || !triangleIncircle(...positions)) return null;
+    const center = automaticIncircleCenterPoint(this.#id(), ids, settings);
     const object = {
       id: this.#id(),
       type: "incircle",
       pointAId,
       pointBId,
       pointCId,
+      centerPointId: center.id,
       style: defaultShapeStyle(settings),
     };
-    this.objects.push(object);
+    this.objects.push(center, object);
     return object;
   }
 
@@ -1003,6 +1017,10 @@ export class GeometryDocument {
       ["intersection", "other-intersection"].includes(pointHit.object.definition?.kind) &&
       intersection && intersection.distance + EPSILON < pointHit.distance;
     if (intersection && (!pointHit || canDisambiguateIntersection)) {
+      const coincidentPoint = this.findCoincidentPoint(intersection.position);
+      if (coincidentPoint) {
+        return { point: coincidentPoint, created: false, snappedToIntersection: true };
+      }
       const point = this.addIntersectionPoint(
         intersection.parents[0],
         intersection.parents[1],
@@ -1391,7 +1409,7 @@ export class GeometryDocument {
     this.#normalizePaintOrder();
     const ordered = sourceDocument.objects.filter((object) => closure.has(object.id));
     const automaticCircleCenterIds = new Set(sourceDocument.objects
-      .filter((object) => object.type === "threePointCircle" && object.centerPointId)
+      .filter((object) => ["threePointCircle", "incircle"].includes(object.type) && object.centerPointId)
       .map((object) => object.centerPointId));
     const idMap = new Map(ordered.map((object) => [object.id, this.#id()]));
     const remap = (value) => {
@@ -1406,7 +1424,7 @@ export class GeometryDocument {
       object.id = idMap.get(source.id);
       object.hidden = false;
       if (object.type === "point") {
-        if (object.definition?.kind === "circumcenter" && automaticCircleCenterIds.has(source.id)) {
+        if (automaticCircleCenterIds.has(source.id)) {
           object.label = "圆心";
           object.style = { ...defaultPointStyle({}), ...object.style, showLabel: false };
         } else object.label = labelForIndex(this.nextLabel++);
@@ -1744,12 +1762,13 @@ export class GeometryDocument {
     }
     if (definition.kind === "intersection") {
       const positions = this.getIntersections(definition.parents[0], definition.parents[1], nextStack);
-      return positions[definition.branch] || null;
+      return positions.length === 1 ? positions[0] : positions[definition.branch] || null;
     }
     if (definition.kind === "other-intersection") {
       const knownPosition = this.getPointPosition(definition.knownPointId, nextStack);
       const positions = this.getIntersections(definition.parents[0], definition.parents[1], nextStack);
-      if (!knownPosition || positions.length < 2) return null;
+      if (!knownPosition || !positions.length) return null;
+      if (positions.length === 1) return positions[0];
       return positions.reduce((best, position) =>
         distance(position, knownPosition) > distance(best, knownPosition) ? position : best
       );
@@ -2156,7 +2175,11 @@ export class GeometryDocument {
         .map((id) => this.getPointPosition(id, nextStack));
       if (points.some((point) => !point)) return null;
       const circle = triangleIncircle(...points);
-      return circle ? { kind: "circle", ...circle } : null;
+      if (!circle) return null;
+      const center = shape.centerPointId
+        ? this.getPointPosition(shape.centerPointId, nextStack) || circle.center
+        : circle.center;
+      return { kind: "circle", ...circle, center };
     }
 
     if (shape.type === "radiusCircle") {
@@ -2303,12 +2326,32 @@ export class GeometryDocument {
     return true;
   }
 
-  setPointLabelOffset(pointId, offset, maximumDistance = 64) {
+  setPointLabelOffset(pointId, offset, baseRadius = 64, labelGeometry = null) {
     const point = this.getObject(pointId);
     if (!point || point.type !== "point") return false;
-    const length = Math.hypot(offset.x, offset.y);
-    const factor = length > maximumDistance ? maximumDistance / length : 1;
-    point.labelOffset = { x: offset.x * factor, y: offset.y * factor };
+    const centerOffset = {
+      x: Number(labelGeometry?.centerOffset?.x) || 0,
+      y: Number(labelGeometry?.centerOffset?.y) || 0,
+    };
+    const halfDiagonal = Math.max(0, Number(labelGeometry?.halfDiagonal) || 0);
+    const desiredCenter = {
+      x: Number(offset.x) + centerOffset.x,
+      y: Number(offset.y) + centerOffset.y,
+    };
+    if (!Number.isFinite(desiredCenter.x) || !Number.isFinite(desiredCenter.y)) return false;
+    const maximumCenterDistance = Math.max(0, Number(baseRadius) || 0) + halfDiagonal;
+    const centerDistance = Math.hypot(desiredCenter.x, desiredCenter.y);
+    const factor = centerDistance > maximumCenterDistance
+      ? maximumCenterDistance / centerDistance
+      : 1;
+    const clampedCenter = {
+      x: desiredCenter.x * factor,
+      y: desiredCenter.y * factor,
+    };
+    point.labelOffset = {
+      x: clampedCenter.x - centerOffset.x,
+      y: clampedCenter.y - centerOffset.y,
+    };
     return true;
   }
 
@@ -2525,6 +2568,21 @@ export class GeometryDocument {
     return this.findNearbyIntersections(position, tolerance)[0] || null;
   }
 
+  findCoincidentPoint(position, tolerance = 1e-6) {
+    const coordinateScale = Math.max(1, Math.abs(position.x), Math.abs(position.y));
+    const threshold = Math.max(Number(tolerance) || 0, EPSILON * 64 * coordinateScale);
+    const paintIndex = new Map(this.paintOrder.map((id, index) => [id, index]));
+    return this.objects
+      .filter((object) => object.type === "point" && !object.hidden)
+      .map((object) => ({ object, position: this.getPointPosition(object) }))
+      .filter((entry) => entry.position && distance(entry.position, position) <= threshold)
+      .sort((first, second) =>
+        Number(this.isPointDirectlyMovable(second.object))
+          - Number(this.isPointDirectlyMovable(first.object))
+        || (paintIndex.get(second.object.id) || 0) - (paintIndex.get(first.object.id) || 0)
+      )[0]?.object || null;
+  }
+
   objectsInRect(rectangle) {
     const rect = {
       left: Math.min(rectangle.x1, rectangle.x2),
@@ -2651,7 +2709,9 @@ export class GeometryDocument {
     if (object.type === "threePointCircle") {
       return [object.pointAId, object.pointBId, object.pointCId, object.centerPointId].filter(Boolean);
     }
-    if (object.type === "incircle") return [object.pointAId, object.pointBId, object.pointCId];
+    if (object.type === "incircle") {
+      return [object.pointAId, object.pointBId, object.pointCId, object.centerPointId].filter(Boolean);
+    }
     if (["segment", "line", "ray", "perpendicularBisector"].includes(object.type)) {
       return [object.pointAId, object.pointBId];
     }
@@ -2670,6 +2730,11 @@ export class GeometryDocument {
   }
 
   removeWithDependents(id) {
+    const target = this.getObject(id);
+    const ownedCenterId = ["threePointCircle", "incircle"].includes(target?.type)
+      && this.getObject(target.centerPointId)?.type === "point"
+      ? target.centerPointId
+      : null;
     const removed = new Set();
     const visit = (targetId) => {
       if (removed.has(targetId)) return;
@@ -2679,6 +2744,7 @@ export class GeometryDocument {
       }
     };
     visit(id);
+    if (ownedCenterId) visit(ownedCenterId);
     this.objects = this.objects.filter((object) => !removed.has(object.id));
     this.paintOrder = this.paintOrder.filter((id) => !removed.has(id));
     if (this.markedCenterId && removed.has(this.markedCenterId)) this.markedCenterId = null;

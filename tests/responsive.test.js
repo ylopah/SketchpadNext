@@ -91,15 +91,16 @@ test("an orientation hint prevents a virtual keyboard from flipping the layout",
 });
 
 test("page and styles expose the mobile layout contract", async () => {
-  const [html, styles, app, environmentModule] = await Promise.all([
+  const [html, styles, app, environmentModule, shell] = await Promise.all([
     readFile(path.join(root, "index.html"), "utf8"),
     readFile(path.join(root, "styles.css"), "utf8"),
     readFile(path.join(root, "src/app.js"), "utf8"),
     readFile(path.join(root, "src/core/environment.js"), "utf8"),
+    readFile(path.join(root, "src/ui/shell.js"), "utf8"),
   ]);
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /<button id="environmentBadge"/);
-  for (const id of ["environmentBadge", "mobileActionsMenu", "inspectorToggleButton", "inspectorPanel", "inspectorBackdrop"]) {
+  for (const id of ["environmentBadge", "mobileActionsMenu", "mobileDocumentTitle", "mobilePageSelect", "mobileShowHiddenButton", "inspectorToggleButton", "inspectorPanel", "inspectorBackdrop"]) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(styles, /100dvh/);
@@ -108,6 +109,13 @@ test("page and styles expose the mobile layout contract", async () => {
   assert.match(styles, /safe-area-inset-bottom/);
   assert.match(styles, /environment-badge\[data-open="true"\]/);
   assert.match(styles, /\.workspace \{[^}]*overflow: hidden/);
+  assert.match(styles, /data-inspector="closed"/);
+  assert.doesNotMatch(html, /id="gridSize"/);
+  assert.match(html, /id="settingsGridSize"/);
+  assert.match(shell, /root\.dataset\.inspector = shouldOpen/);
+  assert.match(shell, /environment\.current\.device === "desktop"/);
+  assert.match(shell, /nextLayoutMode === currentInspectorLayoutMode/);
+  assert.doesNotMatch(app, /elements\.gridSize/);
   assert.match(app, /const cssPixels = .*=== "coarse" \? 18 : 10/);
   assert.match(app, /rect\.width \* 1\.25/);
   assert.match(app, /orientationChanged/);
