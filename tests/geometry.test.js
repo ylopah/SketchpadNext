@@ -820,7 +820,7 @@ test("angle marks can be selected near their visible stroke", () => {
   const geometry = document.getShapeGeometry(mark);
   const hit = document.hitTestShapes(geometry.corner, 1);
   assert.ok(hit.some((item) => item.object.id === mark.id));
-  assert.deepEqual(new Set(document.dependenciesOf(mark)), new Set([vertex.id, sideA.id, sideB.id]));
+  assert.deepEqual(new Set(document.dependenciesOf(mark)), new Set([vertex.id, sideA.id, sideB.id, a.id, b.id]));
   assert.equal(geometry.strokeCount, 1);
   document.cycleAngleMark(mark.id);
   assert.equal(document.getShapeGeometry(mark).strokeCount, 2);
@@ -840,6 +840,47 @@ test("marker drag direction chooses the adjacent angle at a line intersection", 
   const inferred = document.findAngleAt(vertex.id, { x: -8, y: -8 }, 0.01);
   assert.deepEqual(new Set([inferred.sideAId, inferred.sideBId]), new Set([horizontal.id, vertical.id]));
   close(inferred.angle, Math.PI / 2);
+});
+
+test("angle marks store forward ray endpoints and create dynamic endpoints when needed", () => {
+  const document = new GeometryDocument();
+  const rightA = document.addFreePoint({ x: 10, y: 0 }, settings);
+  const rightB = document.addFreePoint({ x: 20, y: 0 }, settings);
+  const downA = document.addFreePoint({ x: 0, y: 10 }, settings);
+  const downB = document.addFreePoint({ x: 0, y: 20 }, settings);
+  const horizontal = document.addLine(rightA.id, rightB.id, settings);
+  const vertical = document.addLine(downA.id, downB.id, settings);
+  const vertex = document.addIntersectionPoint(horizontal.id, vertical.id, 0, settings);
+  const inferred = document.findAngleAt(vertex.id, { x: -8, y: -8 }, 0.01);
+  const mark = document.addAngleMarkFromSides(
+    inferred.vertexId, inferred.sideAId, inferred.directionA,
+    inferred.sideBId, inferred.directionB, settings,
+  );
+  const endpoints = [mark.pointAId, mark.pointBId].map((id) => document.getObject(id));
+  assert.ok(endpoints.every((point) => point.definition.kind === "angle-ray"));
+  const assertForward = () => {
+    const vertexPosition = document.getPointPosition(vertex);
+    for (const [pointId, sideId, direction] of [
+      [mark.pointAId, mark.sideAId, mark.directionA],
+      [mark.pointBId, mark.sideBId, mark.directionB],
+    ]) {
+      const point = document.getPointPosition(pointId);
+      const side = document.getShapeGeometry(sideId);
+      const vector = { x: (side.b.x - side.a.x) * direction, y: (side.b.y - side.a.y) * direction };
+      const offset = { x: point.x - vertexPosition.x, y: point.y - vertexPosition.y };
+      close(offset.x * vector.y - offset.y * vector.x, 0);
+      assert.ok(offset.x * vector.x + offset.y * vector.y > 0);
+    }
+  };
+  assertForward();
+  document.movePoint(rightA.id, { x: 10, y: 5 });
+  document.movePoint(rightB.id, { x: 20, y: 5 });
+  assertForward();
+  const beforeReverse = [mark.pointAId, mark.pointBId];
+  document.reverseAngleMark(mark.id);
+  assert.deepEqual([mark.pointAId, mark.pointBId], beforeReverse.reverse());
+  const restored = GeometryDocument.fromJSON(document.serialize());
+  assert.deepEqual(new Set(restored.dependenciesOf(restored.getObject(mark.id))), new Set(document.dependenciesOf(mark)));
 });
 
 test("path marks follow their parent segment and cycle marks", () => {
@@ -1448,6 +1489,16 @@ test("multiline text and action button hit areas match their rendered bounds", (
   const button = document.addActionButton("link", [], "打开资料", { x: 120, y: 60 }, settings, { url: "https://example.com" });
   assert.equal(document.hitTest({ x: 28, y: 53 }, 1).object.id, text.id);
   assert.equal(document.hitTest({ x: 112, y: 48 }, 1).object.id, button.id);
+  const bounds = document.getTextObjectBounds(text);
+  assert.equal(document.hitTest({ x: bounds.right - 1, y: 30 }, 0).object.id, text.id);
+  assert.ok(document.objectsInRect({
+    x1: bounds.right - 3, y1: bounds.top + 2,
+    x2: bounds.right + 3, y2: bounds.bottom - 2,
+  }).some((object) => object.id === text.id));
+  assert.ok(!document.objectsInRect({
+    x1: bounds.right + 5, y1: bounds.top,
+    x2: bounds.right + 10, y2: bounds.bottom,
+  }).some((object) => object.id === text.id));
 });
 
 test("embedded images can be selected, moved, copied and serialized", () => {

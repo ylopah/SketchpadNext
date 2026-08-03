@@ -230,7 +230,6 @@
             <div class="canvas-hint" id="toolHint" role="status" aria-live="polite">拖动点改变图形，滚轮缩放画布</div>
             <div class="view-actions">
               <label class="toggle-label"><input id="snapToggle" type="checkbox" /> 吸附与网格</label>
-              <button id="inspectorToggleButton" class="inspector-toggle-button" type="button" aria-controls="inspectorPanel" aria-expanded="false">属性</button>
               <button id="resetViewButton">适应画布</button>
             </div>
           </div>
@@ -265,6 +264,7 @@
         </section>
 
         <button id="inspectorBackdrop" class="inspector-backdrop" type="button" aria-label="关闭属性面板" hidden></button>
+        <button id="inspectorCloseButton" class="inspector-close-button" type="button" aria-controls="inspectorPanel" aria-expanded="true" aria-label="收起属性面板">›</button>
         <aside id="inspectorPanel" class="inspector">
           <div class="inspector-heading">
             <div>
@@ -272,7 +272,6 @@
               <h2 id="inspectorTitle">未选择对象</h2>
             </div>
             <span id="selectionBadge" class="selection-badge">未选择</span>
-            <button id="inspectorCloseButton" class="inspector-close-button" type="button" aria-label="关闭属性面板">×</button>
           </div>
 
           <section id="pointStyleSection" class="inspector-section" hidden>
@@ -367,18 +366,7 @@
             <button id="applyCoordinateSystemButton" class="wide-button compact-button" type="button">应用坐标系设置</button>
           </section>
 
-          <button id="batchRenameButton" class="wide-button" disabled>批量命名选中的点</button>
           <button id="applyStyleButton" class="wide-button" disabled>应用到全部选中对象</button>
-
-          <div class="shortcut-card">
-            <h3>快捷操作</h3>
-            <dl>
-              <div><dt>Alt + 工具字母</dt><dd>切换工具（可在设置中关闭）</dd></div>
-              <div><dt>滚轮</dt><dd>缩放画布</dd></div>
-              <div><dt>空格+拖动 / 中键 / 右键</dt><dd>平移画布</dd></div>
-              <div><dt>Esc</dt><dd>取消当前步骤</dd></div>
-            </dl>
-          </div>
         </aside>
       </main>
     </div>

@@ -87,14 +87,15 @@ test("built-in help documents all drawing tools, right-button panning and math n
   assert.match(text, /Alt\+P/);
 });
 
-test("page exposes help/settings, Alt shortcuts, triangle commands and circle below ray", async () => {
+test("page exposes help/settings, tool shortcuts, triangle commands and circle below ray", async () => {
   const html = await readFile(path.join(root, "index.html"), "utf8");
   assert.match(html, /id="helpButton"/);
   assert.match(html, /id="settingsButton"/);
   assert.match(html, /id="helpDialog"/);
   assert.match(html, /id="settingsDialog"/);
-  assert.match(html, /Alt \+ 工具字母/);
-  assert.match(html, /空格\+拖动 \/ 中键 \/ 右键/);
+  assert.match(html, /title="选择\/移动 \(Alt\+V\)"/);
+  assert.doesNotMatch(html, /Alt \+ 工具字母/);
+  assert.doesNotMatch(html, /空格\+拖动 \/ 中键 \/ 右键/);
   assert.match(html, /id="snapToggle"[^>]*\/> 吸附与网格/);
   for (const command of ["centroid", "incenter", "orthocenter", "incircle"]) {
     assert.match(html, new RegExp(`option value="${command}"`));

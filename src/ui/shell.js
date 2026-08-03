@@ -262,27 +262,17 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   const settingsDialog = documentObject.getElementById("settingsDialog");
   const settingsForm = documentObject.getElementById("settingsForm");
   const inspector = documentObject.getElementById("inspectorPanel");
-  const inspectorToggle = documentObject.getElementById("inspectorToggleButton");
   const inspectorClose = documentObject.getElementById("inspectorCloseButton");
   const inspectorBackdrop = documentObject.getElementById("inspectorBackdrop");
   const mobileActionsMenu = documentObject.getElementById("mobileActionsMenu");
   let lastTrigger = null;
   let inspectorTrigger = null;
-  let inspectorPreviewCloseTimer = null;
   const inspectorLayoutMode = (current) =>
     current?.device === "phone" ? `phone:${current.orientation}` : current?.device || "desktop";
   let currentInspectorLayoutMode = inspectorLayoutMode(environment.current);
 
   renderHelp(documentObject.getElementById("helpDialogContent"), documentObject);
   const commandMenus = enhanceCommandMenus(documentObject);
-
-  const canPreviewInspector = () => root.dataset.device === "desktop" && root.dataset.input === "fine";
-  const setInspectorPreview = (open) => {
-    const shouldPreview = Boolean(open) && canPreviewInspector() && root.dataset.inspector === "closed";
-    root.dataset.inspectorPreview = shouldPreview ? "open" : "closed";
-    if (inspector) inspector.setAttribute("aria-hidden", String(!(shouldPreview || root.dataset.inspector !== "closed")));
-    return shouldPreview;
-  };
 
   const closeDialog = (dialog) => {
     if (!dialog || dialog.hidden) return;
@@ -307,16 +297,17 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
 
   const setInspectorOpen = (open, trigger = null, { restoreFocus = true } = {}) => {
     if (!inspector) return;
-    setInspectorPreview(false);
     const compactLayout = root.dataset.device !== "desktop";
     const shouldOpen = Boolean(open);
     root.dataset.inspector = shouldOpen ? "open" : "closed";
     inspector.dataset.mobileOpen = String(compactLayout && shouldOpen);
     inspector.setAttribute("aria-hidden", String(!shouldOpen));
-    inspectorToggle?.setAttribute("aria-expanded", String(shouldOpen));
-    if (inspectorToggle) {
-      inspectorToggle.textContent = compactLayout || !shouldOpen ? "属性" : "收起属性";
-      inspectorToggle.title = shouldOpen ? "收起属性面板" : "展开属性面板";
+    if (inspectorClose) {
+      const portraitPhone = root.dataset.device === "phone" && root.dataset.orientation === "portrait";
+      inspectorClose.textContent = portraitPhone ? (shouldOpen ? "⌄" : "⌃") : (shouldOpen ? "›" : "‹");
+      inspectorClose.setAttribute("aria-expanded", String(shouldOpen));
+      inspectorClose.setAttribute("aria-label", shouldOpen ? "收起属性面板" : "展开属性面板");
+      inspectorClose.title = shouldOpen ? "收起属性面板" : "展开属性面板";
     }
     if (inspectorBackdrop) inspectorBackdrop.hidden = !(compactLayout && shouldOpen);
     if (compactLayout && shouldOpen) {
@@ -334,32 +325,14 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
 
   documentObject.getElementById("helpButton")?.addEventListener("click", (event) => openDialog(helpDialog, event.currentTarget));
   documentObject.getElementById("settingsButton")?.addEventListener("click", (event) => openDialog(settingsDialog, event.currentTarget));
-  inspectorToggle?.addEventListener("click", (event) => {
+  inspectorClose?.addEventListener("click", (event) => {
     const compactLayout = documentObject.documentElement.dataset.device !== "desktop";
     const isOpen = compactLayout
       ? inspector?.dataset.mobileOpen === "true"
       : documentObject.documentElement.dataset.inspector !== "closed";
     setInspectorOpen(!isOpen, event.currentTarget);
   });
-  inspectorClose?.addEventListener("click", () => setInspectorOpen(false));
   inspectorBackdrop?.addEventListener("click", () => setInspectorOpen(false));
-  inspector?.addEventListener("pointerenter", (event) => {
-    if (event.pointerType === "touch") return;
-    windowObject.clearTimeout(inspectorPreviewCloseTimer);
-    setInspectorPreview(true);
-  });
-  inspector?.addEventListener("pointerleave", (event) => {
-    if (event.pointerType === "touch") return;
-    inspectorPreviewCloseTimer = windowObject.setTimeout(() => {
-      if (!inspector.contains(documentObject.activeElement)) setInspectorPreview(false);
-    }, 180);
-  });
-  inspector?.addEventListener("focusin", () => setInspectorPreview(true));
-  inspector?.addEventListener("focusout", () => {
-    windowObject.setTimeout(() => {
-      if (!inspector.contains(documentObject.activeElement) && !inspector.matches(":hover")) setInspectorPreview(false);
-    });
-  });
   documentObject.querySelectorAll("[data-proxy-button]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = documentObject.getElementById(button.dataset.proxyButton);
@@ -370,9 +343,6 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
   documentObject.addEventListener("pointerdown", (event) => {
     if (mobileActionsMenu?.open && !mobileActionsMenu.contains(event.target)) {
       mobileActionsMenu.removeAttribute("open");
-    }
-    if (root.dataset.inspectorPreview === "open" && !inspector?.contains(event.target) && event.target !== inspectorToggle) {
-      setInspectorPreview(false);
     }
   });
   documentObject.querySelectorAll("[data-close-shell-dialog]").forEach((button) => {
@@ -390,10 +360,6 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
       event.preventDefault();
       event.stopImmediatePropagation();
       closeDialog(open);
-    } else if (root.dataset.inspectorPreview === "open") {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      setInspectorPreview(false);
     } else if (inspector?.dataset.mobileOpen === "true") {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -405,7 +371,6 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     const nextLayoutMode = inspectorLayoutMode(event.detail);
     if (nextLayoutMode === currentInspectorLayoutMode) return;
     currentInspectorLayoutMode = nextLayoutMode;
-    setInspectorPreview(false);
     setInspectorOpen(event.detail?.device === "desktop", null, { restoreFocus: false });
   });
 
@@ -442,7 +407,6 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     close: () => {
       [helpDialog, settingsDialog].forEach(closeDialog);
       commandMenus?.closeAll();
-      setInspectorPreview(false);
       setInspectorOpen(false);
     },
     reset: () => {

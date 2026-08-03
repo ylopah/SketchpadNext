@@ -93,7 +93,7 @@ const toolDescriptions = {
   segment: "依次选择两个点创建线段，也可直接在空白处点击",
   line: "依次选择两个点创建无限直线",
   ray: "先选射线端点，再选方向点",
-  midpoint: "选择一条线段，或依次选择两个点创建动态中点",
+  midpoint: "可先多选线段后批量构造，也可点击一条线段或依次选择两个点",
   perpendicularBisector: "选择一条线段，或依次选择/直接点出两个点创建中垂线",
   parallel: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
   perpendicular: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
@@ -117,7 +117,7 @@ const elements = Object.fromEntries([
   "pointName", "showLabels", "showLabelsText", "lineWidth", "lineWidthValue", "lineColor", "lineColorValue", "lineDash",
   "angleMarkSizeRow", "angleMarkSize", "angleMarkSizeValue", "applyStyleButton",
   "pathMarkKindRow", "pathMarkKind",
-  "angleMarkOpacityRow", "angleMarkOpacity", "angleMarkOpacityValue", "angleMarkDirectionRow", "angleMarkShowDirection", "angleMarkReverse", "batchRenameButton",
+  "angleMarkOpacityRow", "angleMarkOpacity", "angleMarkOpacityValue", "angleMarkDirectionRow", "angleMarkShowDirection", "angleMarkReverse",
   "numericObjectSection", "numericObjectDetails", "editNumericObjectButton",
   "calculationPanel", "calculationForm", "calculationPanelTitle", "closeCalculationPanelButton", "calculationName", "calculationExpression",
   "calculationPreview", "calculationVariables", "calculationOperators", "calculationFunctions", "cancelCalculationButton", "saveCalculationButton", "insertNumericIntoCalculationButton",
@@ -139,6 +139,8 @@ let pendingId = null;
 let constructionPointIds = [];
 let constructionStartSnapshot = null;
 let dragState = null;
+let lastCanvasClick = null;
+let suppressNativeDoubleClickUntil = 0;
 let panState = null;
 let spacePanActive = false;
 const activeTouchPoints = new Map();
@@ -205,6 +207,7 @@ function askUser(message, defaultValue = "", options = {}) {
   elements.inputDialogValue.value = String(defaultValue ?? "");
   elements.inputDialogValue.hidden = options.confirmOnly === true;
   elements.inputDialogValue.rows = Number(options.rows) || (options.multiline ? 5 : 2);
+  elements.inputDialogValue.dataset.multiline = options.multiline ? "true" : "false";
   elements.inputDialogConfirm.textContent = options.confirmLabel || "确定";
   elements.inputDialogCancel.textContent = options.cancelLabel || "取消";
   appShell?.setAttribute("inert", "");
@@ -886,6 +889,25 @@ function renderText(object, layer = elements.objectLayer) {
     text.append(tspan);
   });
   layer.append(text);
+  if (object.type !== "actionButton") {
+    try {
+      const bounds = text.getBBox();
+      if ([bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+        const padding = 2;
+        layer.insertBefore(createSvgElement("rect", {
+          x: bounds.x - padding,
+          y: bounds.y - padding,
+          width: Math.max(1, bounds.width + padding * 2),
+          height: Math.max(1, bounds.height + padding * 2),
+          class: "text-hit-target",
+          "data-object-id": object.id,
+          "aria-hidden": "true",
+        }), text);
+      }
+    } catch {
+      // Model hit-testing remains available before the SVG text has layout bounds.
+    }
+  }
 }
 
 function renderImage(object, layer = elements.objectLayer) {
@@ -1016,7 +1038,6 @@ function updateUiState() {
   elements.redoButton.disabled = !history.canRedo;
   elements.deleteButton.disabled = selectedIds.size === 0;
   elements.applyStyleButton.disabled = selectedIds.size === 0;
-  elements.batchRenameButton.disabled = selectedObjects().filter((object) => object.type === "point").length < 2;
   elements.statusTool.textContent = `${toolName(currentTool)}工具`;
   const selected = selectedId ? documentModel.getObject(selectedId) : null;
   const selection = selectedObjects();
@@ -1108,6 +1129,7 @@ function setTool(tool) {
 function activateTool(tool) {
   const restored = cancelIncompleteConstruction();
   if (restored) afterDocumentChange();
+  if (tool === "midpoint" && constructMidpointsFromSelection()) return;
   if (["parallel", "perpendicular"].includes(tool) && constructDerivedLinesFromSelection(tool)) return;
   if (tool === "perpendicularBisector" && constructPerpendicularBisectorsFromSelection()) return;
   if (tool === "angleBisector" && constructAngleBisectorFromSelection()) return;
@@ -1547,6 +1569,19 @@ async function handleSinglePointerDown(event) {
     const labelElement = event.target?.closest?.("[data-label-for]");
     const labelPointId = labelElement?.getAttribute("data-label-for");
     if (labelPointId && documentModel.isPoint(labelPointId)) {
+      if (event.shiftKey) {
+        const next = new Set(selectedIds);
+        if (next.has(labelPointId)) next.delete(labelPointId);
+        else next.add(labelPointId);
+        setSelection([...next], labelPointId);
+        render();
+        return;
+      }
+      if (consumeRecentCanvasClick("label", labelPointId, event)) {
+        suppressNativeDoubleClickUntil = Date.now() + 700;
+        openPointNameEditor(labelPointId);
+        return;
+      }
       const point = documentModel.getObject(labelPointId);
       const pointPosition = documentModel.getPointPosition(point);
       const originalOffset = { ...(point.labelOffset || { x: 12, y: -12 }) };
@@ -1567,7 +1602,10 @@ async function handleSinglePointerDown(event) {
       } catch {
         // Detached or not-yet-painted SVG text falls back to anchor-based limiting.
       }
-      selectOnly(labelPointId);
+      const primaryBefore = selectedId;
+      const selectionIntent = selectionDragIntent(selectedIds, labelPointId);
+      if (!selectionIntent.wasSelected) setSelection(selectionIntent.pointerDownSelection, labelPointId);
+      else selectedId = labelPointId;
       dragState = {
         kind: "label",
         pointId: labelPointId,
@@ -1576,6 +1614,14 @@ async function handleSinglePointerDown(event) {
         originalOffset,
         labelGeometry,
         snapshot: documentModel.serialize(),
+        clickedId: labelPointId,
+        toggleOnClick: selectionIntent.wasSelected,
+        exclusiveOnDrag: selectionIntent.exclusiveOnDrag,
+        exclusiveSelectionApplied: false,
+        dragSelection: selectionIntent.dragSelection,
+        selectionBefore: selectionIntent.before,
+        primaryBefore,
+        startClient: { x: event.clientX, y: event.clientY },
         changed: false,
       };
       captureCanvasPointer(event.pointerId);
@@ -1583,18 +1629,28 @@ async function handleSinglePointerDown(event) {
       return;
     }
     const tolerance = selectionTolerance();
-    const hit = documentModel.hitTest(pointerWorld, tolerance);
+    const directId = event.target?.closest?.("[data-object-id]")?.dataset.objectId;
+    const directObject = directId ? documentModel.getObject(directId) : null;
+    const hit = documentModel.hitTestPoint(pointerWorld, tolerance)
+      || (directObject ? { object: directObject, distance: 0 } : documentModel.hitTest(pointerWorld, tolerance));
+    if (!event.shiftKey && ["text", "parameter", "calculation"].includes(hit?.object.type)
+      && consumeRecentCanvasClick("text", hit.object.id, event)) {
+      suppressNativeDoubleClickUntil = Date.now() + 700;
+      selectOnly(hit.object.id);
+      render();
+      await editCanvasTextObject(hit.object);
+      return;
+    }
     if (hit?.object.type === "actionButton" && !event.shiftKey && !isSelected(hit.object.id)) {
       await executeActionButton(hit.object);
       return;
     }
     const editingActionButton = hit?.object.type === "actionButton" && event.shiftKey;
     const hitShape = documentModel.isShape(hit?.object.id);
-    const hitIntersectionPoint = hit?.object.type === "point"
-      && ["intersection", "other-intersection"].includes(hit.object.definition?.kind);
-    if (!event.shiftKey && (hitShape || hitIntersectionPoint) &&
-      selectOrCreateIntersection(pointerWorld, tolerance, hitShape ? hit.object.id : null)) return;
+    if (!event.shiftKey && hitShape &&
+      selectOrCreateIntersection(pointerWorld, tolerance, hit.object.id)) return;
     if (!hit) {
+      lastCanvasClick = null;
       const baseSelection = event.shiftKey ? new Set(selectedIds) : new Set();
       if (!event.shiftKey) clearSelection();
       marqueeState = {
@@ -1974,6 +2030,7 @@ function handleSinglePointerUp(event) {
     return;
   }
   if (finishedDrag.changed && finishedDrag.snapshot !== documentModel.serialize()) {
+    lastCanvasClick = null;
     history.recordSnapshot(finishedDrag.snapshot);
     afterDocumentChange();
   } else if (!finishedDrag.changed && finishedDrag.toggleOnClick && finishedDrag.clickedId) {
@@ -1981,6 +2038,14 @@ function handleSinglePointerUp(event) {
     next.delete(finishedDrag.clickedId);
     setSelection([...next]);
     render();
+  }
+  if (!finishedDrag.changed) {
+    const clicked = finishedDrag.clickedId ? documentModel.getObject(finishedDrag.clickedId) : null;
+    if (finishedDrag.kind === "label" && clicked?.type === "point") {
+      rememberCanvasClick("label", clicked.id, event);
+    } else if (finishedDrag.kind === "text" && ["text", "parameter", "calculation"].includes(clicked?.type)) {
+      rememberCanvasClick("text", clicked.id, event);
+    } else lastCanvasClick = null;
   }
   dragState = null;
   try { elements.geometryCanvas.releasePointerCapture(event.pointerId); } catch {}
@@ -2523,12 +2588,48 @@ async function editNumericObject(objectOrId) {
   return openCalculationPanel(object);
 }
 
+function rememberCanvasClick(kind, objectId, event) {
+  lastCanvasClick = {
+    kind,
+    objectId,
+    time: Date.now(),
+    clientX: Number(event.clientX),
+    clientY: Number(event.clientY),
+  };
+}
+
+function consumeRecentCanvasClick(kind, objectId, event) {
+  const previous = lastCanvasClick;
+  lastCanvasClick = null;
+  if (!previous || previous.kind !== kind || previous.objectId !== objectId) return false;
+  const elapsed = Date.now() - previous.time;
+  const movement = Math.hypot(Number(event.clientX) - previous.clientX, Number(event.clientY) - previous.clientY);
+  return elapsed >= 0 && elapsed <= 500 && movement <= 8;
+}
+
+function openPointNameEditor(pointId) {
+  selectOnly(pointId);
+  render();
+  requestAnimationFrame(() => { elements.pointName.focus(); elements.pointName.select(); });
+}
+
+async function editCanvasTextObject(object) {
+  if (!object || !["text", "parameter", "calculation"].includes(object.type)) return false;
+  if (["parameter", "calculation"].includes(object.type)) return editNumericObject(object);
+  const content = await askUser("编辑文本", object.content, { title: "编辑文本", multiline: true });
+  if (content === null || content === object.content) return false;
+  const removedEmptyText = !content.trim();
+  mutate(() => { documentModel.updateText(object.id, content); selectOnly(documentModel.getObject(object.id) ? object.id : null); });
+  if (removedEmptyText) showToast("空文本已删除，可用撤销恢复");
+  return true;
+}
+
 async function handleDoubleClick(event) {
   if (currentTool !== "select" || event.button !== 0) return;
+  if (Date.now() < suppressNativeDoubleClickUntil) return;
   const labelPointId = event.target.closest?.("[data-label-for]")?.dataset.labelFor;
   if (labelPointId && documentModel.isPoint(labelPointId)) {
-    event.preventDefault(); selectOnly(labelPointId); render();
-    requestAnimationFrame(() => { elements.pointName.focus(); elements.pointName.select(); });
+    event.preventDefault(); openPointNameEditor(labelPointId);
     return;
   }
   const position = clientToWorld(event);
@@ -2537,12 +2638,7 @@ async function handleDoubleClick(event) {
   const object = directObject || documentModel.hitTest(position, selectionTolerance())?.object;
   if (!object || !["text", "parameter", "calculation"].includes(object.type)) return;
   event.preventDefault();
-  if (["parameter", "calculation"].includes(object.type)) { await editNumericObject(object); return; }
-  const content = await askUser("编辑文本", object.content, { title: "编辑文本", multiline: true });
-  if (content === null || content === object.content) return;
-  const removedEmptyText = !content.trim();
-  mutate(() => { documentModel.updateText(object.id, content); selectOnly(documentModel.getObject(object.id) ? object.id : null); });
-  if (removedEmptyText) showToast("空文本已删除，可用撤销恢复");
+  await editCanvasTextObject(object);
 }
 function deleteSelection() {
   if (cancelIncompleteConstruction()) {
@@ -2763,18 +2859,6 @@ function toggleSelectedPointLabels() {
   mutate(() => {
     for (const point of points) point.style.showLabel = shouldShow;
   });
-}
-
-async function batchRenameSelectedPoints() {
-  const points = selectedObjects().filter((object) => object.type === "point");
-  if (points.length < 2) return;
-  const suggestion = points.map((point) => point.label).join(", ");
-  const input = await askUser(`按选中顺序输入 ${points.length} 个名称，用逗号分隔。下标可写成 A[1]。`, suggestion, { title: "批量命名" });
-  if (!input) return;
-  const labels = input.split(/[,，]/).map((label) => label.trim()).filter(Boolean);
-  if (labels.length !== points.length) { showToast(`需要恰好输入 ${points.length} 个名称`); return; }
-  mutate(() => points.forEach((point, index) => documentModel.renamePoint(point.id, labels[index])));
-  showToast(`已批量命名 ${points.length} 个点`);
 }
 
 function constructMidpointsFromSelection() {
@@ -4398,7 +4482,6 @@ elements.coordinateUnitX.addEventListener("input", () => {
 });
 elements.applyCoordinateSystemButton.addEventListener("click", applyCoordinateSystemSettings);
 elements.applyStyleButton.addEventListener("click", applyStyleToSelection);
-elements.batchRenameButton.addEventListener("click", batchRenameSelectedPoints);
 elements.inputDialogForm.addEventListener("submit", (event) => {
   event.preventDefault();
   finishDialog(elements.inputDialogValue.hidden ? true : elements.inputDialogValue.value);
@@ -4409,7 +4492,7 @@ elements.inputDialog.addEventListener("pointerdown", (event) => {
 });
 elements.inputDialogValue.addEventListener("keydown", (event) => {
   if (event.key === "Escape") { event.preventDefault(); finishDialog(null); }
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && elements.inputDialogValue.dataset.multiline !== "true" && !event.shiftKey) {
     event.preventDefault(); finishDialog(elements.inputDialogValue.value);
   }
 });

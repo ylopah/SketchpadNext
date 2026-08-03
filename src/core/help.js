@@ -20,7 +20,7 @@ export const HELP_SECTIONS = Object.freeze([
       { title: "射线", shortcut: "Alt+Y", description: "先选端点，再选方向点，生成从端点经过方向点无限延伸的射线。" },
       { title: "圆", shortcut: "Alt+C", description: "先选圆心，再选圆上一点；也可在“构造”菜单中用圆心和一条线段构造动态半径圆。" },
       { title: "过三点圆", shortcut: "Alt+O", description: "依次选取三个不共线的点。系统保留动态圆心，但不显示或占用普通点的字母。" },
-      { title: "中点", shortcut: "Alt+M", description: "点击一条线段，或依次选择两个点，创建随父对象联动的中点。" },
+      { title: "中点", shortcut: "Alt+M", description: "可先选择一条或多条线段后点击中点工具批量构造；也可点击一条线段，或依次选择两个点。" },
       { title: "中垂线", shortcut: "Alt+N", description: "选择一条线段，或直接依次点出两个位置，创建两点连线的垂直平分线。" },
       { title: "平行线", shortcut: "Alt+R", description: "选择一个点和一条基准线；预先多选多个点与多条线时，会对每个“点 × 线”组合批量构造。" },
       { title: "垂线", shortcut: "Alt+T", description: "选择一个点和一条基准线；预先多选多个点与多条线时，会对每个“点 × 线”组合批量构造。" },

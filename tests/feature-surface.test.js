@@ -111,6 +111,25 @@ test("application keeps calculation editing and coordinate snapping contracts", 
   assert.ok(appSource.includes("存在多个可见坐标系，请先选中要使用的坐标系"));
 });
 
+test("selection, multiline text and batch midpoint use the direct interaction paths", () => {
+  const pointerHandler = appSource.slice(
+    appSource.indexOf("async function handleSinglePointerDown"),
+    appSource.indexOf("function handleSinglePointerMove"),
+  );
+  const transformHandler = appSource.slice(
+    appSource.indexOf("async function runTransformCommand"),
+    appSource.indexOf("function createCoordinateSystem"),
+  );
+  assert.ok(appSource.includes('if (tool === "midpoint" && constructMidpointsFromSelection()) return;'));
+  assert.ok(appSource.includes("documentModel.hitTestPoint(pointerWorld, tolerance)"));
+  assert.ok(pointerHandler.includes('consumeRecentCanvasClick("text", hit.object.id, event)'));
+  assert.ok(!transformHandler.includes("consumeRecentCanvasClick"));
+  assert.ok(appSource.includes('dataset.multiline !== "true"'));
+  assert.doesNotMatch(indexHtml, /id="batchRenameButton"/);
+  assert.doesNotMatch(indexHtml, /id="inspectorToggleButton"/);
+  assert.doesNotMatch(indexHtml, /快捷操作/);
+});
+
 test("help states radian, degree and two-argument function semantics", () => {
   const requiredTerms = [
     "sin/cos/tan 和 asin/acos/atan 使用弧度",

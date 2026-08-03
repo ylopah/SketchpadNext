@@ -100,7 +100,7 @@ test("page and styles expose the mobile layout contract", async () => {
   ]);
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /<button id="environmentBadge"/);
-  for (const id of ["environmentBadge", "mobileActionsMenu", "mobileDocumentTitle", "mobilePageSelect", "inspectorToggleButton", "inspectorPanel", "inspectorBackdrop"]) {
+  for (const id of ["environmentBadge", "mobileActionsMenu", "mobileDocumentTitle", "mobilePageSelect", "inspectorCloseButton", "inspectorPanel", "inspectorBackdrop"]) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(styles, /100dvh/);
@@ -120,11 +120,11 @@ test("page and styles expose the mobile layout contract", async () => {
   }
   assert.match(html, /文本工具点击未命名点/);
   assert.match(styles, /data-input="fine"[^\n]*\.enhanced-command-menu/);
-  assert.match(styles, /data-inspector-preview="open"/);
+  assert.doesNotMatch(styles, /data-inspector-preview="open"/);
   assert.match(shell, /function enhanceCommandMenus/);
   assert.match(shell, /select\.dispatchEvent\(new windowObject\.Event\("change"/);
   assert.match(shell, /setAttribute\("aria-expanded"/);
-  assert.match(shell, /const setInspectorPreview/);
+  assert.doesNotMatch(shell, /const setInspectorPreview/);
   assert.match(shell, /root\.dataset\.inspector = shouldOpen/);
   assert.match(shell, /environment\.current\.device === "desktop"/);
   assert.match(shell, /nextLayoutMode === currentInspectorLayoutMode/);

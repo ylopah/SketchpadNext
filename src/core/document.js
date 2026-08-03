@@ -566,7 +566,7 @@ export class GeometryDocument {
     }
     if (object.measurementKind === "slope" && shapes[0]?.kind === "line") {
       const dx = shapes[0].b.x - shapes[0].a.x;
-      return Math.abs(dx) <= EPSILON ? null : (shapes[0].b.y - shapes[0].a.y) / dx;
+      return Math.abs(dx) <= EPSILON ? null : -(shapes[0].b.y - shapes[0].a.y) / dx;
     }
     if (object.measurementKind === "pointValue") {
       const point = this.getObject(object.parents[0]);
@@ -901,8 +901,10 @@ export class GeometryDocument {
         const candidates = definingIds.filter((id) => id !== object.vertexId && this.getObject(id)?.type === "point");
         return candidates.length ? pointLabel(candidates[0]) : null;
       };
-      const first = object.sideAId ? sideLabel(object.sideAId) : pointLabel(object.pointAId);
-      const second = object.sideBId ? sideLabel(object.sideBId) : pointLabel(object.pointBId);
+      const first = object.pointAId ? pointLabel(object.pointAId)
+        : object.sideAId ? sideLabel(object.sideAId) : null;
+      const second = object.pointBId ? pointLabel(object.pointBId)
+        : object.sideBId ? sideLabel(object.sideBId) : null;
       return first && second ? `∠${first}${vertex}${second}`
         : `角标记（顶点 ${vertex}，${this.getObjectName(object.sideAId)} / ${this.getObjectName(object.sideBId)}）`;
     }
@@ -1323,17 +1325,87 @@ export class GeometryDocument {
     return this.addAngleBisector(vertexId, pointAId, pointBId, settings);
   }
 
+  #angleRayEndpoint(vertexId, sideId, direction, settings, preferredDistance = 60) {
+    const vertex = this.getPointPosition(vertexId);
+    const sideObject = this.getObject(sideId);
+    const side = this.getShapeGeometry(sideId);
+    if (!vertex || side?.kind !== "line") return null;
+    const vector = { x: side.b.x - side.a.x, y: side.b.y - side.a.y };
+    const length = Math.hypot(vector.x, vector.y);
+    if (length <= EPSILON) return null;
+    const sign = direction < 0 ? -1 : 1;
+    const unit = { x: vector.x / length * sign, y: vector.y / length * sign };
+    const candidateIds = new Set([
+      sideObject?.pointAId,
+      sideObject?.pointBId,
+      sideObject?.pointId,
+      sideObject?.vertexId,
+      sideObject?.directionPointId,
+    ].filter(Boolean));
+    for (const candidate of this.objects) {
+      if (candidate.type !== "point" || candidate.hidden || candidate.id === vertexId) continue;
+      const definition = candidate.definition || {};
+      const followsSide = (definition.kind === "on-shape" && definition.parentId === sideId)
+        || (definition.kind === "angle-ray"
+          && definition.parentId === sideId
+          && definition.vertexId === vertexId)
+        || (["intersection", "other-intersection"].includes(definition.kind)
+          && Array.isArray(definition.parents) && definition.parents.includes(sideId));
+      if (followsSide) candidateIds.add(candidate.id);
+    }
+    const candidates = [...candidateIds]
+      .map((id) => ({ id, point: this.getPointPosition(id) }))
+      .filter(({ id, point }) => id !== vertexId && point)
+      .map(({ id, point }) => {
+        const offset = { x: point.x - vertex.x, y: point.y - vertex.y };
+        return {
+          id,
+          along: offset.x * unit.x + offset.y * unit.y,
+          perpendicular: Math.abs(offset.x * unit.y - offset.y * unit.x),
+          scale: Math.max(1, Math.hypot(offset.x, offset.y)),
+        };
+      })
+      .filter((candidate) => candidate.along > EPSILON
+        && candidate.perpendicular <= Math.max(1e-6, candidate.scale * 1e-7))
+      .sort((first, second) => first.along - second.along);
+    if (candidates.length) return this.getObject(candidates[0].id);
+
+    const point = {
+      id: this.#id(),
+      type: "point",
+      definition: {
+        kind: "angle-ray",
+        vertexId,
+        parentId: sideId,
+        direction: sign,
+        distance: Math.max(24, Number(preferredDistance) || 60),
+      },
+      label: this.#newPointLabel(settings),
+      labelOffset: { x: 12, y: -12 },
+      style: defaultPointStyle(settings),
+    };
+    this.objects.push(point);
+    return point;
+  }
+
   addAngleMarkFromSides(vertexId, sideAId, directionA, sideBId, directionB, settings, options = {}) {
     if (!this.isPoint(vertexId) || sideAId === sideBId) return null;
     const sideA = this.getShapeGeometry(sideAId);
     const sideB = this.getShapeGeometry(sideBId);
     if (sideA?.kind !== "line" || sideB?.kind !== "line") return null;
+    const radius = Number.isFinite(options.radius) ? Math.max(10, Math.min(64, options.radius)) : 24;
+    const endpointDistance = Math.max(40, radius * 2.5);
+    const pointA = this.#angleRayEndpoint(vertexId, sideAId, directionA, settings, endpointDistance);
+    const pointB = this.#angleRayEndpoint(vertexId, sideBId, directionB, settings, endpointDistance);
+    if (!pointA || !pointB) return null;
     const object = {
       id: this.#id(),
       type: "angleMark",
       vertexId,
       sideAId,
       sideBId,
+      pointAId: pointA.id,
+      pointBId: pointB.id,
       directionA: directionA < 0 ? -1 : 1,
       directionB: directionB < 0 ? -1 : 1,
       directionPointId: this.isPoint(options.directionPointId) ? options.directionPointId : null,
@@ -1342,7 +1414,7 @@ export class GeometryDocument {
       strokeCount: Math.max(1, Math.min(4, Number(options.strokeCount) || 1)),
       opacity: Number.isFinite(options.opacity) ? Math.max(0, Math.min(1, options.opacity)) : 0.25,
       showDirection: options.showDirection === true,
-      radius: Number.isFinite(options.radius) ? Math.max(10, Math.min(64, options.radius)) : 24,
+      radius,
       style: defaultShapeStyle(settings),
     };
     this.objects.push(object);
@@ -1541,6 +1613,7 @@ export class GeometryDocument {
     if (object.sideAId && object.sideBId) {
       [object.sideAId, object.sideBId] = [object.sideBId, object.sideAId];
       [object.directionA, object.directionB] = [object.directionB, object.directionA];
+      [object.pointAId, object.pointBId] = [object.pointBId, object.pointAId];
       if (object.directionPointId) {
         object.directionPointSide = object.directionPointSide === "b" ? "a" : "b";
       }
@@ -1798,6 +1871,17 @@ export class GeometryDocument {
       const inversionCircle = this.getShapeGeometry(definition.circleId, nextStack);
       if (!parent || inversionCircle?.kind !== "circle") return null;
       return invertPointInCircle(parent, inversionCircle);
+    }
+    if (definition.kind === "angle-ray") {
+      const vertex = this.getPointPosition(definition.vertexId, nextStack);
+      const side = this.getShapeGeometry(definition.parentId, nextStack);
+      if (!vertex || side?.kind !== "line") return null;
+      const vector = { x: side.b.x - side.a.x, y: side.b.y - side.a.y };
+      const length = Math.hypot(vector.x, vector.y);
+      if (length <= EPSILON) return null;
+      const scale = (definition.direction < 0 ? -1 : 1)
+        * Math.max(24, Number(definition.distance) || 60) / length;
+      return { x: vertex.x + vector.x * scale, y: vertex.y + vector.y * scale };
     }
     if (definition.kind === "on-shape") {
       const geometry = this.getShapeGeometry(definition.parentId, nextStack);
@@ -2116,6 +2200,16 @@ export class GeometryDocument {
         const baseSignB = shape.directionB < 0 ? -1 : 1;
         let signA = baseSignA;
         let signB = baseSignB;
+        const endpointA = shape.pointAId ? this.getPointPosition(shape.pointAId, nextStack) : null;
+        const endpointB = shape.pointBId ? this.getPointPosition(shape.pointBId, nextStack) : null;
+        const alignmentA = endpointA
+          ? vectorA.x * (endpointA.x - vertex.x) + vectorA.y * (endpointA.y - vertex.y)
+          : 0;
+        const alignmentB = endpointB
+          ? vectorB.x * (endpointB.x - vertex.x) + vectorB.y * (endpointB.y - vertex.y)
+          : 0;
+        if (Math.abs(alignmentA) > EPSILON) signA = alignmentA < 0 ? -1 : 1;
+        if (Math.abs(alignmentB) > EPSILON) signB = alignmentB < 0 ? -1 : 1;
         if (shape.directionPointId) {
           const reference = this.getPointPosition(shape.directionPointId, nextStack);
           const referenceVector = reference
@@ -2549,6 +2643,48 @@ export class GeometryDocument {
     return [...result];
   }
 
+  getTextDisplayContent(objectOrId) {
+    const object = typeof objectOrId === "string" ? this.getObject(objectOrId) : objectOrId;
+    if (!TEXT_TYPES.has(object?.type)) return null;
+    if (object.type === "measurement") return this.getMeasurementText(object) || "";
+    if (["parameter", "calculation"].includes(object.type)) return this.getValueText(object) || "";
+    if (object.type === "table") {
+      const table = this.getTableData(object);
+      return table ? [table.headers.join("    "), ...table.rows.map((row) => row.join("    "))].join("\n") : "";
+    }
+    if (object.type === "actionButton") return String(object.label || "");
+    return String(object.content || "");
+  }
+
+  getTextObjectBounds(objectOrId) {
+    const object = typeof objectOrId === "string" ? this.getObject(objectOrId) : objectOrId;
+    const content = this.getTextDisplayContent(object);
+    if (!object || content === null) return null;
+    const fontSize = Number(object.style?.fontSize) || (object.type === "actionButton" ? 15 : 18);
+    if (object.type === "actionButton") {
+      const width = Math.max(72, String(content).length * fontSize * 0.9 + 24);
+      return { left: object.x - 12, top: object.y - fontSize - 8, right: object.x - 12 + width, bottom: object.y + 10 };
+    }
+    const lines = String(plainMathText(content, { enableScripts: true })).split(/\r?\n/);
+    const characterEm = (character) => {
+      if (/\s/u.test(character)) return 0.34;
+      if (/[\u2e80-\u9fff\uf900-\ufaff\uff01-\uff60]/u.test(character)) return 1;
+      if (/[MW@#%&]/u.test(character)) return 0.9;
+      if (/[ilI1.,'`|:;]/u.test(character)) return 0.32;
+      return 0.62;
+    };
+    const width = Math.max(fontSize, ...lines.map((line) =>
+      [...line].reduce((sum, character) => sum + characterEm(character) * fontSize, 0)
+    ));
+    const padding = 2;
+    return {
+      left: object.x - padding,
+      top: object.y - fontSize - padding,
+      right: object.x + width + padding,
+      bottom: object.y + Math.max(0, lines.length - 1) * fontSize * 1.35 + fontSize * 0.3 + padding,
+    };
+  }
+
   hitTest(position, tolerance = 10) {
     const shapeHits = new Map(this.hitTestShapes(position, tolerance)
       .map((hit) => [hit.object.id, hit]));
@@ -2575,22 +2711,8 @@ export class GeometryDocument {
         const hitDistance = rectangleDistance(object.x, object.y, object.x + object.width, object.y + object.height);
         if (hitDistance <= tolerance) candidates.push({ object, distance: hitDistance, paintIndex: paintIndex.get(object.id) });
       } else if (TEXT_TYPES.has(object.type)) {
-        const fontSize = Number(object.style?.fontSize) || 18;
-        const content = object.type === "measurement" ? this.getMeasurementText(object) || ""
-          : ["parameter", "calculation"].includes(object.type) ? this.getValueText(object) || ""
-            : object.type === "table" ? (this.getTableData(object)?.rows || []).map((row) => row.join("  ")).join("\n")
-              : object.type === "actionButton" ? object.label : object.content;
-        const visibleContent = plainMathText(content, { enableScripts: true });
-        const lines = String(visibleContent).split(/\r?\n/);
-        const longestLine = lines.reduce((longest, line) => Math.max(longest, line.length), 0);
-        const actionWidth = Math.max(72, String(visibleContent).length * fontSize * 0.9 + 24);
-        const width = object.type === "actionButton" ? actionWidth : Math.max(fontSize, longestLine * fontSize * 0.58);
-        const left = object.type === "actionButton" ? object.x - 12 : object.x;
-        const top = object.type === "actionButton" ? object.y - fontSize - 8 : object.y - fontSize;
-        const bottom = object.type === "actionButton"
-          ? object.y + 10
-          : object.y + Math.max(0, lines.length - 1) * fontSize * 1.35 + fontSize * 0.3;
-        const hitDistance = rectangleDistance(left, top, left + width, bottom);
+        const bounds = this.getTextObjectBounds(object);
+        const hitDistance = rectangleDistance(bounds.left, bounds.top, bounds.right, bounds.bottom);
         if (hitDistance <= tolerance) candidates.push({ object, distance: hitDistance, paintIndex: paintIndex.get(object.id) });
       } else if (shapeHits.has(object.id)) {
         const hit = shapeHits.get(object.id);
@@ -2769,6 +2891,8 @@ export class GeometryDocument {
     };
     const contains = (point) => point && point.x >= rect.left && point.x <= rect.right &&
       point.y >= rect.top && point.y <= rect.bottom;
+    const overlaps = (bounds) => bounds && bounds.right >= rect.left && bounds.left <= rect.right
+      && bounds.bottom >= rect.top && bounds.top <= rect.bottom;
     const corners = [
       { x: rect.left, y: rect.top },
       { x: rect.right, y: rect.top },
@@ -2784,8 +2908,8 @@ export class GeometryDocument {
 
     return this.objects.filter((object) => {
       if (object.hidden) return false;
-      if (object.type === "image") return contains({ x: object.x, y: object.y }) || contains({ x: object.x + object.width, y: object.y + object.height });
-      if (TEXT_TYPES.has(object.type)) return contains({ x: object.x, y: object.y });
+      if (object.type === "image") return overlaps({ left: object.x, top: object.y, right: object.x + object.width, bottom: object.y + object.height });
+      if (TEXT_TYPES.has(object.type)) return overlaps(this.getTextObjectBounds(object));
       if (object.type === "point") return contains(this.getPointPosition(object));
       const geometry = this.getShapeGeometry(object);
       if (!geometry) return false;
@@ -2857,6 +2981,9 @@ export class GeometryDocument {
       }
       if (object.definition.kind === "reflected") return [object.definition.parentId, object.definition.mirrorId];
       if (object.definition.kind === "inverted") return [object.definition.parentId, object.definition.circleId];
+      if (object.definition.kind === "angle-ray") {
+        return [object.definition.vertexId, object.definition.parentId];
+      }
       if (object.definition.kind === "on-shape") return [object.definition.parentId];
       if (object.definition.kind === "plotted") {
         return [object.definition.coordinateSystemId, ...new Set(Object.values(object.definition.variables || {}))];
@@ -2895,7 +3022,14 @@ export class GeometryDocument {
       return [object.pointAId, object.pointBId];
     }
     if (object.type === "angleMark" && object.sideAId && object.sideBId) {
-      return [object.vertexId, object.sideAId, object.sideBId, object.directionPointId].filter(Boolean);
+      return [...new Set([
+        object.vertexId,
+        object.sideAId,
+        object.sideBId,
+        object.pointAId,
+        object.pointBId,
+        object.directionPointId,
+      ].filter(Boolean))];
     }
     if (object.type === "pathMark") return [object.parentShapeId];
     if (object.type === "doodle") return [];

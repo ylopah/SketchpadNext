@@ -54,7 +54,7 @@ test("every measurement kind uses concise mathematical notation without CJK boil
     ["coordinates", [b.id, system.id], "B = (0.40, 0.00)"],
     ["coordinateX", [b.id, system.id], "x(B) = 0.40"],
     ["coordinateY", [b.id, system.id], "y(B) = 0.00"],
-    ["slope", [lineBC.id], "k(ℓ(BC)) = -0.75"],
+    ["slope", [lineBC.id], "k(ℓ(BC)) = 0.75"],
     ["pointValue", [driver.id], "t(F) = 0.50"],
   ];
 
