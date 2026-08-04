@@ -9,6 +9,7 @@ const settings = {
   lineWidth: 2,
   lineColor: "#334155",
   showLabels: true,
+  worldUnitsPerCentimeter: 1,
 };
 
 function close(actual, expected, epsilon = 1e-7) {
@@ -39,7 +40,7 @@ test("point-to-line distance respects segment, ray, and infinite-line bounds", (
   close(document.getMeasurementValue(lineDistance), 4);
   assert.equal(
     document.getMeasurementText(segmentDistance),
-    "d(C,\\overline{AB}) = 6.40",
+    "d(C,\\overline{AB}) = 6.40 cm",
   );
 
   document.movePoint(point.id, { x: 15, y: 4 });
@@ -63,11 +64,11 @@ test("polygon area and perimeter follow ordered vertices dynamically", () => {
   close(document.getMeasurementValue(perimeter), 14);
   assert.equal(
     document.getMeasurementText(area),
-    "S(ABCD) = 12.00",
+    "S(ABCD) = 12.00 cm^2",
   );
   assert.equal(
     document.getMeasurementText(perimeter),
-    "P(ABCD) = 14.00",
+    "P(ABCD) = 14.00 cm",
   );
 
   document.movePoint(c.id, { x: 4, y: 4 });
@@ -76,7 +77,7 @@ test("polygon area and perimeter follow ordered vertices dynamically", () => {
   document.renamePoint(d.id, "P");
   assert.equal(
     document.getMeasurementText(area),
-    "S(ABCP) = 14.00",
+    "S(ABCP) = 14.00 cm^2",
   );
 });
 
@@ -130,7 +131,10 @@ test("extended measurement kinds and dependencies survive serialization", () => 
   close(restored.getMeasurementValue(pointLineDistance.id), 8);
   close(restored.getMeasurementValue(polygonArea.id), 24);
   close(restored.getMeasurementValue(polygonPerimeter.id), 24);
-  assert.deepEqual(restored.dependenciesOf(restored.getObject(pointLineDistance.id)), [c.id, line.id]);
+  assert.deepEqual(
+    restored.dependenciesOf(restored.getObject(pointLineDistance.id)),
+    [c.id, line.id, a.id, b.id],
+  );
   assert.deepEqual(restored.dependenciesOf(restored.getObject(polygonArea.id)), [a.id, b.id, c.id]);
   assert.equal(restored.getObject(polygonPerimeter.id).measurementKind, "polygonPerimeter");
 

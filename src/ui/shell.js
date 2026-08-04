@@ -37,7 +37,7 @@ const INTERFACE_HELP_SECTION = Object.freeze({
   items: Object.freeze([
     { title: "给点命名", description: "新建点默认不显示名称。选择文本工具后点击未命名点，会按当前空缺的字母顺序生成名称；再次点击可继续编辑。" },
     { title: "悬停菜单", description: "使用桌面鼠标时，把光标停在画布上方的构造、度量等菜单即可展开；键盘和触屏设备仍可单击打开。" },
-    { title: "属性栏预览", description: "桌面端收起属性栏后，把光标移到窗口右侧的窄边缘可临时展开；移开后自动收回，单击“属性”可固定展开。" },
+    { title: "属性栏与画布平移", description: "右键已选对象可展开属性栏，右键空白处可收起；按住右键拖动仍可平移画布。" },
   ]),
 });
 
@@ -135,8 +135,8 @@ function enhanceCommandMenus(documentObject) {
     }
 
     trigger.addEventListener("click", () => {
-      if (menu.open) closeMenu(menu);
-      else openMenu(menu);
+      windowObject.clearTimeout(menu.openTimer);
+      if (!menu.open) openMenu(menu);
     });
     trigger.addEventListener("keydown", (event) => {
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -333,6 +333,9 @@ export function initializeShellPanels(documentObject = globalThis.document, stor
     setInspectorOpen(!isOpen, event.currentTarget);
   });
   inspectorBackdrop?.addEventListener("click", () => setInspectorOpen(false));
+  windowObject.addEventListener("sketchpadnext:inspectorrequest", (event) => {
+    setInspectorOpen(Boolean(event.detail?.open), event.detail?.trigger || null, { restoreFocus: false });
+  });
   documentObject.querySelectorAll("[data-proxy-button]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = documentObject.getElementById(button.dataset.proxyButton);

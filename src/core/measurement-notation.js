@@ -10,10 +10,10 @@ function objectSuffix(object) {
 
 function pointToken(documentModel, pointOrId) {
   const point = resolveObject(documentModel, pointOrId);
-  if (point?.type !== "point") return "P_?";
+  if (point?.type !== "point") return "?";
   const label = String(point.label ?? "").trim();
   if (label && label !== "圆心") return label;
-  return `P_${objectSuffix(point)}`;
+  return "?";
 }
 
 function pointSequence(documentModel, ids) {
@@ -26,10 +26,36 @@ function basicLinePair(documentModel, object) {
   return pointSequence(documentModel, [object.pointAId, object.pointBId]);
 }
 
-function lineToken(documentModel, objectOrId, geometry = null) {
+function linePointIds(measurement, objectOrId) {
+  const objectId = typeof objectOrId === "string" ? objectOrId : objectOrId?.id;
+  return measurement?.notationRefs?.linePointPairs
+    ?.find((entry) => entry?.objectId === objectId)?.pointIds || null;
+}
+
+function circleCenterId(measurement, objectOrId) {
+  const objectId = typeof objectOrId === "string" ? objectOrId : objectOrId?.id;
+  return measurement?.notationRefs?.circleCenters
+    ?.find((entry) => entry?.objectId === objectId)?.pointId || null;
+}
+
+function arcPointIds(measurement, objectOrId) {
+  const objectId = typeof objectOrId === "string" ? objectOrId : objectOrId?.id;
+  return measurement?.notationRefs?.arcPointSequences
+    ?.find((entry) => entry?.objectId === objectId)?.pointIds || null;
+}
+
+function linePair(documentModel, objectOrId, measurement = null) {
+  const object = resolveObject(documentModel, objectOrId);
+  const referencedIds = linePointIds(measurement, object);
+  return Array.isArray(referencedIds) && referencedIds.length >= 2
+    ? pointSequence(documentModel, referencedIds.slice(0, 2))
+    : basicLinePair(documentModel, object);
+}
+
+function lineToken(documentModel, objectOrId, geometry = null, measurement = null) {
   const object = resolveObject(documentModel, objectOrId);
   const shape = geometry || documentModel.getShapeGeometry(object);
-  const pair = basicLinePair(documentModel, object);
+  const pair = linePair(documentModel, object, measurement);
   if (object?.type === "segment" || shape?.segment === true) {
     return `\\overline{${pair || `L_${objectSuffix(object)}`}}`;
   }
@@ -39,9 +65,11 @@ function lineToken(documentModel, objectOrId, geometry = null) {
   return pair ? `ℓ(${pair})` : `ℓ_${objectSuffix(object)}`;
 }
 
-function circleToken(documentModel, objectOrId) {
+function circleToken(documentModel, objectOrId, measurement = null) {
   const object = resolveObject(documentModel, objectOrId);
   if (!object) return "⊙_?";
+  const referencedCenterId = circleCenterId(measurement, object);
+  if (referencedCenterId) return `⊙${pointToken(documentModel, referencedCenterId)}`;
   if (["circle", "radiusCircle"].includes(object.type) && object.centerId) {
     return `⊙${pointToken(documentModel, object.centerId)}`;
   }
@@ -54,8 +82,12 @@ function circleToken(documentModel, objectOrId) {
   return `⊙_${objectSuffix(object)}`;
 }
 
-function arcToken(documentModel, objectOrId) {
+function arcToken(documentModel, objectOrId, measurement = null) {
   const object = resolveObject(documentModel, objectOrId);
+  const referencedIds = arcPointIds(measurement, object);
+  if (Array.isArray(referencedIds) && referencedIds.length >= 2) {
+    return `⌢${pointSequence(documentModel, referencedIds)}`;
+  }
   if (object?.type === "arc") {
     return `⌢${pointSequence(documentModel, [object.startPointId, object.endPointId])}`;
   }
@@ -73,7 +105,11 @@ function otherLinePoint(documentModel, lineOrId, vertexId) {
   return candidates[0] || null;
 }
 
-function angleMarkToken(documentModel, object) {
+function angleMarkToken(documentModel, object, measurement = null) {
+  const referencedIds = measurement?.notationRefs?.anglePointIds;
+  if (Array.isArray(referencedIds) && referencedIds.length === 3) {
+    return `∠${pointSequence(documentModel, referencedIds)}`;
+  }
   const vertexId = object?.vertexId;
   if (!vertexId) return `θ_${objectSuffix(object)}`;
   const firstId = object.pointAId || otherLinePoint(documentModel, object.sideAId, vertexId);
@@ -110,6 +146,11 @@ function fixed(value, decimals) {
   return Number.isFinite(value) ? value.toFixed(decimals) : null;
 }
 
+function measurementUnit(measurement, dimension = 1) {
+  const unit = measurement?.lengthUnit === "cm" ? "cm" : "cm";
+  return ` ${unit}${dimension === 2 ? "^2" : ""}`;
+}
+
 export function formatMeasurementText(documentModel, measurementOrId, decimalPlaces = 2) {
   const object = resolveObject(documentModel, measurementOrId);
   if (object?.type !== "measurement" || !Array.isArray(object.parents)) return null;
@@ -125,14 +166,14 @@ export function formatMeasurementText(documentModel, measurementOrId, decimalPla
     && parents.length === 2
     && parents.every((parent) => parent.type === "point")
     && formatted !== null) {
-    return `${pointSequence(documentModel, object.parents)} = ${formatted}`;
+    return `${pointSequence(documentModel, object.parents)} = ${formatted}${measurementUnit(object)}`;
   }
 
   if (object.measurementKind === "pointLineDistance" && object.parents.length === 2 && formatted !== null) {
     const pointIndex = parents.findIndex((parent) => parent.type === "point");
     const lineIndex = shapes.findIndex((shape) => shape?.kind === "line");
     if (pointIndex < 0 || lineIndex < 0 || pointIndex === lineIndex) return null;
-    return `d(${pointToken(documentModel, parents[pointIndex])},${lineToken(documentModel, parents[lineIndex], shapes[lineIndex])}) = ${formatted}`;
+    return `d(${pointToken(documentModel, parents[pointIndex])},${lineToken(documentModel, parents[lineIndex], shapes[lineIndex], object)}) = ${formatted}${measurementUnit(object)}`;
   }
 
   if (["polygonArea", "polygonPerimeter"].includes(object.measurementKind)
@@ -140,50 +181,55 @@ export function formatMeasurementText(documentModel, measurementOrId, decimalPla
     && parents.every((parent) => parent.type === "point")
     && formatted !== null) {
     const operator = object.measurementKind === "polygonArea" ? "S" : "P";
-    return `${operator}(${pointSequence(documentModel, object.parents)}) = ${formatted}`;
+    const dimension = object.measurementKind === "polygonArea" ? 2 : 1;
+    return `${operator}(${pointSequence(documentModel, object.parents)}) = ${formatted}${measurementUnit(object, dimension)}`;
   }
 
   if (object.measurementKind === "collinearity"
     && parents.length === 3
     && parents.every((parent) => parent.type === "point")
     && Number.isFinite(value)) {
-    return `ε_{col}(${object.parents.map((id) => pointToken(documentModel, id)).join(",")}) = ${value.toExponential(3)}`;
+    return `ε_{col}(${object.parents.map((id) => pointToken(documentModel, id)).join(",")}) = ${value.toExponential(3)}${measurementUnit(object)}`;
   }
 
   if (object.measurementKind === "pointCircleError" && Number.isFinite(value)) {
     const pointIndex = parents.findIndex((parent) => parent.type === "point");
     const circleIndex = shapes.findIndex((shape) => shape?.kind === "circle");
     if (pointIndex < 0 || circleIndex < 0 || pointIndex === circleIndex) return null;
-    return `ε(${pointToken(documentModel, parents[pointIndex])},${circleToken(documentModel, parents[circleIndex])}) = ${value.toExponential(3)}`;
+    return `ε(${pointToken(documentModel, parents[pointIndex])},${circleToken(documentModel, parents[circleIndex], object)}) = ${value.toExponential(3)}${measurementUnit(object)}`;
   }
 
   if (object.measurementKind === "length"
     && shapes[0]?.kind === "line"
     && shapes[0].segment === true
     && formatted !== null) {
-    return `${lineToken(documentModel, parents[0], shapes[0])} = ${formatted}`;
+    return `${lineToken(documentModel, parents[0], shapes[0], object)} = ${formatted}${measurementUnit(object)}`;
   }
 
   if (object.measurementKind === "arcLength" && shapes[0]?.kind === "arc" && formatted !== null) {
-    return `${arcToken(documentModel, parents[0])} = ${formatted}`;
+    return `${arcToken(documentModel, parents[0], object)} = ${formatted}${measurementUnit(object)}`;
   }
 
   if (object.measurementKind === "ratio"
     && shapes.length === 2
     && shapes.every((shape) => shape?.kind === "line" && shape.segment === true)
     && formatted !== null) {
-    return `${lineToken(documentModel, parents[0], shapes[0])}/${lineToken(documentModel, parents[1], shapes[1])} = ${formatted}`;
+    return `${lineToken(documentModel, parents[0], shapes[0], object)}/${lineToken(documentModel, parents[1], shapes[1], object)} = ${formatted}`;
   }
 
   if (object.measurementKind === "angle" && formatted !== null) {
     if (shapes.length === 1 && shapes[0]?.kind === "angleMark") {
-      return `${angleMarkToken(documentModel, parents[0])} = ${formatted}°`;
+      return `${angleMarkToken(documentModel, parents[0], object)} = ${formatted}°`;
     }
     if (shapes.length === 1 && shapes[0]?.kind === "arc") {
-      return `m(${arcToken(documentModel, parents[0])}) = ${formatted}°`;
+      return `m(${arcToken(documentModel, parents[0], object)}) = ${formatted}°`;
     }
     if (shapes.length === 2 && shapes.every((shape) => shape?.kind === "line")) {
-      return `∠(${lineToken(documentModel, parents[0], shapes[0])},${lineToken(documentModel, parents[1], shapes[1])}) = ${formatted}°`;
+      const pointIds = object.notationRefs?.anglePointIds;
+      if (Array.isArray(pointIds) && pointIds.length === 3) {
+        return `∠${pointSequence(documentModel, pointIds)} = ${formatted}°`;
+      }
+      return `∠(${lineToken(documentModel, parents[0], shapes[0], object)},${lineToken(documentModel, parents[1], shapes[1], object)}) = ${formatted}°`;
     }
     if (parents.length === 3 && parents.every((parent) => parent.type === "point")) {
       return `∠${pointSequence(documentModel, object.parents)} = ${formatted}°`;
@@ -195,7 +241,8 @@ export function formatMeasurementText(documentModel, measurementOrId, decimalPla
     && formatted !== null) {
     const operator = object.measurementKind === "radius" ? "r"
       : object.measurementKind === "circumference" ? "C" : "S";
-    return `${operator}(${circleToken(documentModel, parents[0])}) = ${formatted}`;
+    const dimension = object.measurementKind === "circleArea" ? 2 : 1;
+    return `${operator}(${circleToken(documentModel, parents[0], object)}) = ${formatted}${measurementUnit(object, dimension)}`;
   }
 
   if (object.measurementKind === "coordinates" && points[0]) {
@@ -225,7 +272,8 @@ export function formatMeasurementText(documentModel, measurementOrId, decimalPla
     const dx = shapes[0].b.x - shapes[0].a.x;
     const slope = Math.abs(dx) <= EPSILON ? "∞" : formatted;
     if (slope === null) return null;
-    return `k(${lineToken(documentModel, parents[0], shapes[0])}) = ${slope}`;
+    const pair = linePair(documentModel, parents[0], object);
+    return `k(${pair || lineToken(documentModel, parents[0], shapes[0], object)}) = ${slope}`;
   }
 
   if (object.measurementKind === "pointValue" && parents[0]?.type === "point" && formatted !== null) {

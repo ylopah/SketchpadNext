@@ -802,6 +802,15 @@ test("angle mark switches dynamically between an arc and a right-angle square", 
   assert.ok(geometry.corner);
   close(Math.abs(geometry.signedAngle), Math.PI / 2);
 
+  const withinTolerance = (90 + 0.0009) * Math.PI / 180;
+  document.movePoint(b.id, { x: 20 * Math.cos(withinTolerance), y: 20 * Math.sin(withinTolerance) });
+  geometry = document.getShapeGeometry(mark);
+  assert.equal(geometry.rightAngle, true);
+  const outsideTolerance = (90 + 0.0011) * Math.PI / 180;
+  document.movePoint(b.id, { x: 20 * Math.cos(outsideTolerance), y: 20 * Math.sin(outsideTolerance) });
+  geometry = document.getShapeGeometry(mark);
+  assert.equal(geometry.rightAngle, false);
+
   document.movePoint(b.id, { x: 10, y: 10 * Math.sqrt(3) });
   geometry = document.getShapeGeometry(mark);
   assert.equal(geometry.rightAngle, false);
@@ -941,12 +950,12 @@ test("measurements update dynamically with their parent geometry", () => {
   const lengthValue = document.addMeasurement("length", [segment.id], { x: 0, y: 20 }, settings);
   const angleValue = document.addMeasurement("angle", [a.id, vertex.id, b.id], { x: 0, y: 40 }, settings);
   const radiusValue = document.addMeasurement("radius", [circle.id], { x: 0, y: 60 }, settings);
-  assert.equal(document.getMeasurementText(distanceValue), "AC = 5.00");
-  assert.equal(document.getMeasurementText(lengthValue), "\\overline{AC} = 5.00");
+  assert.equal(document.getMeasurementText(distanceValue), "AC = 0.10 cm");
+  assert.equal(document.getMeasurementText(lengthValue), "\\overline{AC} = 0.10 cm");
   assert.equal(document.getMeasurementText(angleValue), "∠ABC = 90.00°");
-  assert.equal(document.getMeasurementText(radiusValue), "r(⊙A) = 3.00");
+  assert.equal(document.getMeasurementText(radiusValue), "r(⊙A) = 0.06 cm");
   document.movePoint(b.id, { x: 6, y: 0 });
-  assert.equal(document.getMeasurementText(distanceValue), "AC = 6.00");
+  assert.equal(document.getMeasurementText(distanceValue), "AC = 0.12 cm");
   assert.deepEqual(document.dependenciesOf(distanceValue), [a.id, b.id]);
 });
 
@@ -957,10 +966,10 @@ test("collinearity measurement reports normalized point-to-line error", () => {
   const c = document.addFreePoint({ x: 25, y: 0 }, settings);
   const value = document.addMeasurement("collinearity", [a.id, b.id, c.id], { x: 0, y: 0 }, settings);
   close(document.getMeasurementValue(value), 0);
-  assert.equal(document.getMeasurementText(value), "ε_{col}(A,B,C) = 0.000e+0");
+  assert.equal(document.getMeasurementText(value), "ε_{col}(A,B,C) = 0.000e+0 cm");
   document.movePoint(c.id, { x: 25, y: 4 });
-  close(document.getMeasurementValue(value), 4);
-  assert.equal(document.getMeasurementText(value), "ε_{col}(A,B,C) = 4.000e+0");
+  close(document.getMeasurementValue(value), 0.08);
+  assert.equal(document.getMeasurementText(value), "ε_{col}(A,B,C) = 8.000e-2 cm");
 });
 
 test("angle marks and arcs can be measured with named dynamic results", () => {
@@ -991,7 +1000,7 @@ test("any two line-like objects can report their named smaller angle", () => {
   const perpendicular = document.addPerpendicularLine(origin.id, base.id, settings);
   const value = document.addMeasurement("angle", [parallel.id, perpendicular.id], { x: 0, y: 0 }, settings);
   close(document.getMeasurementValue(value), 90);
-  assert.equal(document.getMeasurementText(value), "∠(ℓ_5,ℓ_6) = 90.00°");
+  assert.equal(document.getMeasurementText(value), "∠DEA = 90.00°");
 });
 
 test("arc length, segment ratio, path value and coordinate-system measurements are dynamic", () => {
@@ -1009,7 +1018,7 @@ test("arc length, segment ratio, path value and coordinate-system measurements a
   const ratioValue = document.addMeasurement("ratio", [first.id, second.id], { x: 0, y: 20 }, settings);
   const pointValue = document.addMeasurement("pointValue", [driver.id], { x: 0, y: 40 }, settings);
   const coordinates = document.addMeasurement("coordinates", [right.id, system.id], { x: 0, y: 60 }, settings);
-  close(document.getMeasurementValue(arcValue), Math.PI * 10);
+  close(document.getMeasurementValue(arcValue), Math.PI / 5);
   close(document.getMeasurementValue(ratioValue), 1);
   close(document.getMeasurementValue(pointValue), 0.5);
   assert.equal(document.getMeasurementText(coordinates), "B = (1.00, 0.00)");

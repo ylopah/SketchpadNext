@@ -27,8 +27,31 @@ const SHAPE_TYPES = new Set([
   "transformedShape",
 ]);
 
+const DEFAULT_WORLD_UNITS_PER_CENTIMETER = 50;
+const LENGTH_MEASUREMENT_KINDS = new Set([
+  "distance", "pointLineDistance", "polygonPerimeter", "collinearity", "pointCircleError",
+  "length", "arcLength", "radius", "circumference",
+]);
+const AREA_MEASUREMENT_KINDS = new Set(["polygonArea", "circleArea"]);
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function measurementScale(measurement) {
+  const scale = Number(measurement?.worldUnitsPerCentimeter);
+  return Number.isFinite(scale) && scale > EPSILON ? scale : DEFAULT_WORLD_UNITS_PER_CENTIMETER;
+}
+
+function notationReferenceIds(notationRefs) {
+  const ids = [];
+  const visit = (value) => {
+    if (typeof value === "string") ids.push(value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") Object.values(value).forEach(visit);
+  };
+  visit(notationRefs);
+  return [...new Set(ids)];
 }
 
 function defaultPointStyle(settings) {
@@ -194,6 +217,25 @@ export class GeometryDocument {
           [object.xExpression, object.yExpression], candidates, ["t"], object.id, hasBindings,
         );
       }
+    }
+    const legacyMeasurements = this.objects.filter((object) => object.type === "measurement");
+    for (const measurement of legacyMeasurements) {
+      if (!Object.hasOwn(measurement, "lengthUnit")) measurement.lengthUnit = "cm";
+      if (!Object.hasOwn(measurement, "worldUnitsPerCentimeter")) {
+        measurement.worldUnitsPerCentimeter = DEFAULT_WORLD_UNITS_PER_CENTIMETER;
+      }
+      if (Object.hasOwn(measurement, "notationRefs")) continue;
+      const anchor = {
+        x: Number.isFinite(Number(measurement.x)) ? Number(measurement.x) : 0,
+        y: Number.isFinite(Number(measurement.y)) ? Number(measurement.y) : 0,
+      };
+      measurement.notationRefs = this.#prepareMeasurementNotation(measurement, anchor, {
+        autoNamePoints: false,
+        pointSize: 6,
+        pointColor: "#000000",
+        pointLabelFontSize: 17,
+        lineColor: measurement.style?.color || "#334155",
+      });
     }
   }
 
@@ -391,11 +433,18 @@ export class GeometryDocument {
   addMeasurement(measurementKind, parentIds, position, settings = {}) {
     const parents = Array.isArray(parentIds) ? parentIds : [];
     if (!parents.length || parents.some((id) => !this.getObject(id))) return null;
+    const lineAngleParents = measurementKind === "angle" && parents.length === 2
+      && parents.every((id) => this.getShapeGeometry(id)?.kind === "line");
+    if (lineAngleParents && this.getIntersections(parents[0], parents[1]).length !== 1) return null;
+    const configuredScale = Number(settings.worldUnitsPerCentimeter);
     const object = {
       id: this.#id(),
       type: "measurement",
       measurementKind,
       parents: [...parents],
+      lengthUnit: "cm",
+      worldUnitsPerCentimeter: Number.isFinite(configuredScale) && configuredScale > EPSILON
+        ? configuredScale : DEFAULT_WORLD_UNITS_PER_CENTIMETER,
       x: Number(position.x),
       y: Number(position.y),
       style: {
@@ -404,8 +453,382 @@ export class GeometryDocument {
       },
     };
     if (!this.getMeasurementText(object)) return null;
+    const requestedAnchor = settings.selectionAnchor;
+    const selectionAnchor = requestedAnchor
+      && Number.isFinite(Number(requestedAnchor.x))
+      && Number.isFinite(Number(requestedAnchor.y))
+      ? { x: Number(requestedAnchor.x), y: Number(requestedAnchor.y) }
+      : { x: Number(position.x), y: Number(position.y) };
+    object.notationRefs = this.#prepareMeasurementNotation(object, selectionAnchor, settings);
+    if (!object.notationRefs) return null;
+    if (!this.getMeasurementText(object)) return null;
     this.objects.push(object);
     return object;
+  }
+
+  #ensureMeasurementPointLabel(pointId, settings = {}) {
+    const point = this.getObject(pointId);
+    if (point?.type !== "point") return null;
+    point.hidden = false;
+    const label = String(point.label || "").trim();
+    const needsLabel = !label || label === "圆心";
+    if (needsLabel) point.label = this.nextAvailablePointLabel(point.id);
+    point.style = { ...defaultPointStyle(settings), ...(point.style || {}), showLabel: true };
+    if (needsLabel) {
+      point.labelOffset = this.suggestPointLabelOffset(point.id, {
+        baseRadius: 32,
+        fontSize: Number(settings.pointLabelFontSize) || 17,
+      });
+    }
+    return point.id;
+  }
+
+  #lineNotationCandidates(shapeId, geometry, selectionAnchor) {
+    const directionLength = distance(geometry.a, geometry.b);
+    const tolerance = Math.max(1e-6, directionLength * 1e-7);
+    const anchor = Number.isFinite(selectionAnchor?.x) && Number.isFinite(selectionAnchor?.y)
+      ? selectionAnchor : geometry.a;
+    const candidates = [];
+    for (const object of this.objects) {
+      if (object.type !== "point" || object.hidden) continue;
+      const point = this.getPointPosition(object);
+      if (!point) continue;
+      const projection = projectPointToLine(point, geometry.a, geometry.b, geometry.segment, geometry.ray);
+      if (projection.distance > tolerance) continue;
+      const label = String(object.label || "").trim();
+      const candidate = {
+        id: object.id,
+        position: point,
+        anchorDistance: distance(point, anchor),
+        named: Boolean(label && label !== "圆心"),
+      };
+      const duplicateIndex = candidates.findIndex((existing) =>
+        distance(existing.position, point) <= tolerance);
+      if (duplicateIndex < 0) candidates.push(candidate);
+      else if (candidate.named && !candidates[duplicateIndex].named) candidates[duplicateIndex] = candidate;
+    }
+    return candidates;
+  }
+
+  #lineNotationCreationPosition(geometry, selectionAnchor, candidates) {
+    const direction = { x: geometry.b.x - geometry.a.x, y: geometry.b.y - geometry.a.y };
+    const directionLength = Math.hypot(direction.x, direction.y);
+    if (directionLength <= EPSILON) return null;
+    const anchor = Number.isFinite(selectionAnchor?.x) && Number.isFinite(selectionAnchor?.y)
+      ? selectionAnchor : geometry.a;
+    const projection = projectPointToLine(anchor, geometry.a, geometry.b, geometry.segment, geometry.ray);
+    const step = Math.max(24, Math.min(50, directionLength)) / directionLength;
+    const rawParameters = [projection.t, projection.t + step, projection.t - step,
+      projection.t + step * 2, projection.t - step * 2, 0, 1];
+    const normalizedParameters = rawParameters.map((parameter) => geometry.segment
+      ? Math.max(0, Math.min(1, parameter))
+      : geometry.ray ? Math.max(0, parameter) : parameter);
+    const uniqueParameters = [...new Set(normalizedParameters.map((parameter) => Number(parameter.toFixed(12))))];
+    for (const parameter of uniqueParameters) {
+      const position = {
+        x: geometry.a.x + direction.x * parameter,
+        y: geometry.a.y + direction.y * parameter,
+      };
+      if (candidates.every((candidate) => distance(candidate.position, position) > 1e-6)) return position;
+    }
+    return null;
+  }
+
+  #ensureLineNotationPair(shapeId, selectionAnchor, settings, preferDefiningPair = false) {
+    const geometry = this.getShapeGeometry(shapeId);
+    if (geometry?.kind !== "line") return [];
+    const shape = this.getObject(shapeId);
+    if (preferDefiningPair
+      && this.isPoint(shape?.pointAId)
+      && this.isPoint(shape?.pointBId)
+      && shape.pointAId !== shape.pointBId) {
+      const pair = [shape.pointAId, shape.pointBId];
+      pair.forEach((pointId) => this.#ensureMeasurementPointLabel(pointId, settings));
+      return pair;
+    }
+    const candidates = this.#lineNotationCandidates(shapeId, geometry, selectionAnchor);
+    const byAnchor = (items) => [...items].sort((first, second) =>
+      first.anchorDistance - second.anchorDistance
+      || first.id.localeCompare(second.id, undefined, { numeric: true }));
+    const named = candidates.filter((candidate) => candidate.named);
+    let selected;
+    if (named.length >= 2) {
+      selected = (named.length >= 3 ? byAnchor(named) : named).slice(0, 2);
+    } else {
+      selected = [...named];
+      const anonymous = candidates.filter((candidate) => !candidate.named);
+      const orderedAnonymous = candidates.length >= 3 ? byAnchor(anonymous) : anonymous;
+      selected.push(...orderedAnonymous.slice(0, 2 - selected.length));
+    }
+    while (selected.length < 2) {
+      const position = this.#lineNotationCreationPosition(geometry, selectionAnchor, candidates);
+      if (!position) break;
+      const point = this.addPointOnShape(shapeId, position, { ...settings, autoNamePoints: false });
+      if (!point) break;
+      const pointPosition = this.getPointPosition(point);
+      const candidate = {
+        id: point.id,
+        position: pointPosition,
+        anchorDistance: distance(pointPosition, selectionAnchor || geometry.a),
+        named: false,
+      };
+      candidates.push(candidate);
+      selected.push(candidate);
+    }
+    const pair = selected.map((candidate) => candidate.id);
+    pair.forEach((pointId) => this.#ensureMeasurementPointLabel(pointId, settings));
+    return pair;
+  }
+
+  #circleCenterPointId(circle, geometry, settings = {}) {
+    if (!circle) return null;
+    const directId = circle.centerId || circle.centerPointId;
+    if (this.isPoint(directId)) return directId;
+    const existing = this.objects.find((object) => object.type === "point"
+      && object.definition?.kind === "shape-center"
+      && object.definition.parentId === circle.id);
+    if (existing) return existing.id;
+    if (geometry?.kind !== "circle") return null;
+    const point = {
+      id: this.#id(),
+      type: "point",
+      definition: { kind: "shape-center", parentId: circle.id },
+      label: "",
+      labelOffset: { x: 12, y: -12 },
+      style: { ...defaultPointStyle({ ...settings, autoNamePoints: false }), showLabel: false },
+    };
+    this.objects.push(point);
+    return point.id;
+  }
+
+  #arcNotationPointIds(arc) {
+    if (!arc) return [];
+    if (arc.type === "arc") return [arc.startPointId, arc.endPointId].filter((id) => this.isPoint(id));
+    if (arc.type === "threePointArc") {
+      return [arc.pointAId, arc.pointBId, arc.pointCId].filter((id) => this.isPoint(id));
+    }
+    return [];
+  }
+
+  #angleMarkNotationPointIds(mark) {
+    if (mark?.type !== "angleMark") return [];
+    const sidePoint = (sideId) => {
+      const side = this.getObject(sideId);
+      return [side?.pointAId, side?.pointBId, side?.pointId, side?.vertexId, side?.directionPointId]
+        .find((id) => id && id !== mark.vertexId && this.isPoint(id)) || null;
+    };
+    const firstId = this.isPoint(mark.pointAId) ? mark.pointAId : sidePoint(mark.sideAId);
+    const secondId = this.isPoint(mark.pointBId) ? mark.pointBId : sidePoint(mark.sideBId);
+    return [firstId, mark.vertexId, secondId].filter((id) => this.isPoint(id));
+  }
+
+  #lineAngleVertex(firstId, secondId, position, settings) {
+    const tolerance = 1e-6;
+    const sameParents = (point) => {
+      const definition = point.definition || {};
+      if (!["intersection", "other-intersection"].includes(definition.kind)) return false;
+      const parents = new Set(definition.parents || []);
+      return parents.size === 2 && parents.has(firstId) && parents.has(secondId);
+    };
+    let vertex = this.objects.find((object) => {
+      const pointPosition = object.type === "point" ? this.getPointPosition(object) : null;
+      return pointPosition && sameParents(object) && distance(pointPosition, position) <= tolerance;
+    });
+    if (!vertex) {
+      const first = this.getObject(firstId);
+      const second = this.getObject(secondId);
+      const pointFields = (shape) => new Set([
+        shape?.pointAId, shape?.pointBId, shape?.pointId, shape?.vertexId, shape?.directionPointId,
+      ].filter((id) => this.isPoint(id)));
+      const firstPoints = pointFields(first);
+      vertex = [...pointFields(second)]
+        .filter((id) => firstPoints.has(id))
+        .map((id) => this.getObject(id))
+        .find((point) => {
+          const pointPosition = this.getPointPosition(point);
+          return pointPosition && distance(pointPosition, position) <= tolerance;
+        });
+    }
+    if (!vertex) {
+      vertex = this.addIntersectionPoint(firstId, secondId, 0, { ...settings, autoNamePoints: false });
+    }
+    if (!vertex || !this.getPointPosition(vertex)) return null;
+    vertex.hidden = false;
+    return vertex;
+  }
+
+  #lineAngleDirections(geometry, vertex) {
+    const projection = projectPointToLine(vertex, geometry.a, geometry.b);
+    const domainTolerance = 1e-7;
+    if (geometry.segment) {
+      if (projection.t <= domainTolerance) return [1];
+      if (projection.t >= 1 - domainTolerance) return [-1];
+    } else if (geometry.ray && projection.t <= domainTolerance) return [1];
+    return [1, -1];
+  }
+
+  #selectLineAngleDirections(first, second, vertex, selectionAnchor) {
+    const vector = (geometry, direction) => {
+      const dx = geometry.b.x - geometry.a.x;
+      const dy = geometry.b.y - geometry.a.y;
+      const length = Math.hypot(dx, dy);
+      return { x: dx / length * direction, y: dy / length * direction };
+    };
+    const anchorOffset = {
+      x: Number(selectionAnchor?.x) - vertex.x,
+      y: Number(selectionAnchor?.y) - vertex.y,
+    };
+    const anchorLength = Math.hypot(anchorOffset.x, anchorOffset.y);
+    const anchor = anchorLength > EPSILON
+      ? { x: anchorOffset.x / anchorLength, y: anchorOffset.y / anchorLength }
+      : null;
+    const candidates = [];
+    for (const directionA of this.#lineAngleDirections(first, vertex)) {
+      for (const directionB of this.#lineAngleDirections(second, vertex)) {
+        const unitA = vector(first, directionA);
+        const unitB = vector(second, directionB);
+        const cosine = Math.max(-1, Math.min(1, unitA.x * unitB.x + unitA.y * unitB.y));
+        const angle = Math.acos(cosine);
+        if (angle <= EPSILON || Math.abs(angle - Math.PI) <= EPSILON) continue;
+        const bisector = { x: unitA.x + unitB.x, y: unitA.y + unitB.y };
+        const bisectorLength = Math.hypot(bisector.x, bisector.y);
+        const alignment = anchor && bisectorLength > EPSILON
+          ? (bisector.x * anchor.x + bisector.y * anchor.y) / bisectorLength : -1;
+        const inside = anchor ? alignment >= Math.cos(angle / 2) - 1e-9 : false;
+        candidates.push({ directionA, directionB, angle, alignment, inside });
+      }
+    }
+    candidates.sort((a, b) => Number(b.inside) - Number(a.inside)
+      || b.alignment - a.alignment
+      || a.angle - b.angle
+      || b.directionA - a.directionA
+      || b.directionB - a.directionB);
+    return candidates[0] || null;
+  }
+
+  #lineAngleEndpointCandidates(shapeId, geometry, vertexId, vertex, direction) {
+    const shape = this.getObject(shapeId);
+    const directIds = new Set([
+      shape?.pointAId, shape?.pointBId, shape?.pointId, shape?.vertexId, shape?.directionPointId,
+    ].filter((id) => this.isPoint(id)));
+    const followsShape = (point) => {
+      if (directIds.has(point.id)) return true;
+      const definition = point.definition || {};
+      if (["on-shape", "angle-ray"].includes(definition.kind)) return definition.parentId === shapeId;
+      return ["intersection", "other-intersection"].includes(definition.kind)
+        && Array.isArray(definition.parents) && definition.parents.includes(shapeId);
+    };
+    const dx = geometry.b.x - geometry.a.x;
+    const dy = geometry.b.y - geometry.a.y;
+    const directionLength = Math.hypot(dx, dy);
+    const unit = { x: dx / directionLength * direction, y: dy / directionLength * direction };
+    const tolerance = Math.max(1e-6, directionLength * 1e-7);
+    return this.objects.filter((object) => object.type === "point"
+      && !object.hidden && object.id !== vertexId && followsShape(object))
+      .map((object) => {
+        const position = this.getPointPosition(object);
+        const projection = position ? projectPointToLine(position, geometry.a, geometry.b) : null;
+        const along = position
+          ? (position.x - vertex.x) * unit.x + (position.y - vertex.y) * unit.y : -Infinity;
+        return { object, position, projection, along };
+      })
+      .filter((candidate) => candidate.position
+        && candidate.projection.distance <= tolerance
+        && (!geometry.segment || (candidate.projection.t >= -1e-7 && candidate.projection.t <= 1 + 1e-7))
+        && (!geometry.ray || candidate.projection.t >= -1e-7)
+        && candidate.along > tolerance)
+      .sort((a, b) => a.along - b.along
+        || a.object.id.localeCompare(b.object.id, undefined, { numeric: true }));
+  }
+
+  #lineAngleEndpoint(shapeId, geometry, vertexId, vertex, direction, settings) {
+    const existing = this.#lineAngleEndpointCandidates(
+      shapeId, geometry, vertexId, vertex, direction,
+    )[0]?.object;
+    if (existing) return existing;
+    const dx = geometry.b.x - geometry.a.x;
+    const dy = geometry.b.y - geometry.a.y;
+    const directionLength = Math.hypot(dx, dy);
+    if (directionLength <= EPSILON) return null;
+    const preferredDistance = Math.max(24, Math.min(50, directionLength));
+    return this.#angleRayEndpoint(
+      vertexId, shapeId, direction, { ...settings, autoNamePoints: false }, preferredDistance,
+    );
+  }
+
+  #lineAngleNotationPointIds(measurement, selectionAnchor, settings) {
+    if (measurement.parents.length !== 2) return null;
+    const [firstId, secondId] = measurement.parents;
+    const first = this.getShapeGeometry(firstId);
+    const second = this.getShapeGeometry(secondId);
+    if (first?.kind !== "line" || second?.kind !== "line") return null;
+    const intersections = this.getIntersections(firstId, secondId);
+    if (intersections.length !== 1) return null;
+    const vertex = this.#lineAngleVertex(firstId, secondId, intersections[0], settings);
+    const vertexPosition = vertex ? this.getPointPosition(vertex) : null;
+    if (!vertexPosition) return null;
+    const directions = this.#selectLineAngleDirections(first, second, vertexPosition, selectionAnchor);
+    if (!directions) return null;
+    const pointA = this.#lineAngleEndpoint(
+      firstId, first, vertex.id, vertexPosition, directions.directionA, settings,
+    );
+    const pointB = this.#lineAngleEndpoint(
+      secondId, second, vertex.id, vertexPosition, directions.directionB, settings,
+    );
+    if (!pointA || !pointB) return null;
+    const pointIds = [pointA.id, vertex.id, pointB.id];
+    pointIds.forEach((pointId) => this.#ensureMeasurementPointLabel(pointId, settings));
+    return pointIds;
+  }
+
+  #prepareMeasurementNotation(measurement, selectionAnchor, settings) {
+    const refs = {
+      pointIds: [],
+      linePointPairs: [],
+      circleCenters: [],
+      arcPointSequences: [],
+      anglePointIds: [],
+    };
+    const lineAngle = measurement.measurementKind === "angle" && measurement.parents.length === 2
+      && measurement.parents.every((id) => this.getShapeGeometry(id)?.kind === "line");
+    if (lineAngle) {
+      const pointIds = this.#lineAngleNotationPointIds(measurement, selectionAnchor, settings);
+      if (!pointIds) return null;
+      refs.anglePointIds = pointIds;
+      return refs;
+    }
+    for (const parentId of measurement.parents) {
+      const parent = this.getObject(parentId);
+      const geometry = this.getShapeGeometry(parentId);
+      if (parent?.type === "point") {
+        this.#ensureMeasurementPointLabel(parentId, settings);
+        refs.pointIds.push(parentId);
+      }
+      if (geometry?.kind === "line") {
+        const pointIds = this.#ensureLineNotationPair(
+          parentId, selectionAnchor, settings, measurement.measurementKind !== "slope",
+        );
+        if (pointIds.length === 2) refs.linePointPairs.push({ objectId: parentId, pointIds });
+      }
+      if (geometry?.kind === "circle") {
+        const pointId = this.#circleCenterPointId(parent, geometry, settings);
+        if (pointId) {
+          this.#ensureMeasurementPointLabel(pointId, settings);
+          refs.circleCenters.push({ objectId: parentId, pointId });
+        }
+      }
+      if (geometry?.kind === "arc") {
+        const pointIds = this.#arcNotationPointIds(parent);
+        pointIds.forEach((pointId) => this.#ensureMeasurementPointLabel(pointId, settings));
+        if (pointIds.length >= 2) refs.arcPointSequences.push({ objectId: parentId, pointIds });
+      }
+      if (geometry?.kind === "angleMark") {
+        const pointIds = this.#angleMarkNotationPointIds(parent);
+        pointIds.forEach((pointId) => this.#ensureMeasurementPointLabel(pointId, settings));
+        if (pointIds.length === 3) refs.anglePointIds = pointIds;
+      }
+    }
+    return refs;
   }
 
   addParameter(name, value, unit, position, settings = {}) {
@@ -481,6 +904,15 @@ export class GeometryDocument {
 
   getMeasurementValue(measurementOrId) {
     const object = typeof measurementOrId === "string" ? this.getObject(measurementOrId) : measurementOrId;
+    const rawValue = this.#getRawMeasurementValue(object);
+    if (!Number.isFinite(rawValue) || object?.type !== "measurement") return rawValue;
+    const dimension = LENGTH_MEASUREMENT_KINDS.has(object.measurementKind)
+      ? 1 : AREA_MEASUREMENT_KINDS.has(object.measurementKind) ? 2 : 0;
+    return dimension ? rawValue / (measurementScale(object) ** dimension) : rawValue;
+  }
+
+  #getRawMeasurementValue(measurementOrId) {
+    const object = typeof measurementOrId === "string" ? this.getObject(measurementOrId) : measurementOrId;
     if (object?.type !== "measurement") return null;
     const points = object.parents.map((id) => this.getPointPosition(id));
     const shapes = object.parents.map((id) => this.getShapeGeometry(id));
@@ -537,6 +969,24 @@ export class GeometryDocument {
       return Math.abs(shapes[0].signedAngle) * 180 / Math.PI;
     }
     if (object.measurementKind === "angle" && shapes.length === 2 && shapes.every((shape) => shape?.kind === "line")) {
+      const notationPoints = object.notationRefs?.anglePointIds
+        ?.map((id) => this.getPointPosition(id));
+      if (notationPoints?.length === 3) {
+        if (!notationPoints.every(Boolean)) return null;
+        const first = {
+          x: notationPoints[0].x - notationPoints[1].x,
+          y: notationPoints[0].y - notationPoints[1].y,
+        };
+        const second = {
+          x: notationPoints[2].x - notationPoints[1].x,
+          y: notationPoints[2].y - notationPoints[1].y,
+        };
+        const denominator = Math.hypot(first.x, first.y) * Math.hypot(second.x, second.y);
+        if (denominator <= EPSILON) return null;
+        const cosine = Math.max(-1, Math.min(1,
+          (first.x * second.x + first.y * second.y) / denominator));
+        return Math.acos(cosine) * 180 / Math.PI;
+      }
       const first = { x: shapes[0].b.x - shapes[0].a.x, y: shapes[0].b.y - shapes[0].a.y };
       const second = { x: shapes[1].b.x - shapes[1].a.x, y: shapes[1].b.y - shapes[1].a.y };
       const denominator = Math.hypot(first.x, first.y) * Math.hypot(second.x, second.y);
@@ -1544,6 +1994,10 @@ export class GeometryDocument {
     const automaticCircleCenterIds = new Set(sourceDocument.objects
       .filter((object) => ["threePointCircle", "incircle"].includes(object.type) && object.centerPointId)
       .map((object) => object.centerPointId));
+    const notationPointIds = new Set(sourceDocument.objects
+      .filter((object) => object.type === "measurement")
+      .flatMap((object) => notationReferenceIds(object.notationRefs))
+      .filter((id) => sourceDocument.getObject(id)?.type === "point"));
     const idMap = new Map(ordered.map((object) => [object.id, this.#id()]));
     const remap = (value) => {
       if (typeof value === "string") return idMap.get(value) || value;
@@ -1557,10 +2011,17 @@ export class GeometryDocument {
       object.id = idMap.get(source.id);
       object.hidden = false;
       if (object.type === "point") {
-        if (automaticCircleCenterIds.has(source.id)) {
+        if (automaticCircleCenterIds.has(source.id) && !notationPointIds.has(source.id)) {
           object.label = "圆心";
           object.style = { ...defaultPointStyle({}), ...object.style, showLabel: false };
-        } else object.label = String(source.label || "").trim() ? this.#newPointLabel({}) : "";
+        } else {
+          const shouldName = notationPointIds.has(source.id)
+            || (String(source.label || "").trim() && source.label !== "圆心");
+          object.label = shouldName ? this.#newPointLabel({}) : "";
+          if (notationPointIds.has(source.id)) {
+            object.style = { ...defaultPointStyle({}), ...object.style, showLabel: true };
+          }
+        }
         if (object.definition.kind === "free") { object.definition.x += dx; object.definition.y += dy; }
       } else if (TEXT_TYPES.has(object.type) || MEDIA_TYPES.has(object.type)) { object.x += dx; object.y += dy; }
       else if (object.type === "doodle") object.points = object.points.map((point) => ({ x: point.x + dx, y: point.y + dy }));
@@ -1871,6 +2332,10 @@ export class GeometryDocument {
       const inversionCircle = this.getShapeGeometry(definition.circleId, nextStack);
       if (!parent || inversionCircle?.kind !== "circle") return null;
       return invertPointInCircle(parent, inversionCircle);
+    }
+    if (definition.kind === "shape-center") {
+      const parent = this.getShapeGeometry(definition.parentId, nextStack);
+      return parent?.kind === "circle" ? { ...parent.center } : null;
     }
     if (definition.kind === "angle-ray") {
       const vertex = this.getPointPosition(definition.vertexId, nextStack);
@@ -2254,7 +2719,7 @@ export class GeometryDocument {
       const radius = Math.max(8, Math.min(Number(shape.radius) || 32, maximumRadius));
       const start = { x: vertex.x + unitA.x * radius, y: vertex.y + unitA.y * radius };
       const end = { x: vertex.x + unitB.x * radius, y: vertex.y + unitB.y * radius };
-      const rightAngle = Math.abs(signedAngle - Math.PI / 2) <= Math.PI / 240;
+      const rightAngle = Math.abs(signedAngle - Math.PI / 2) <= Math.PI / (180 * 1000);
       const corner = rightAngle ? {
         x: vertex.x + (unitA.x + unitB.x) * radius,
         y: vertex.y + (unitA.y + unitB.y) * radius,
@@ -2956,7 +3421,9 @@ export class GeometryDocument {
     if (!object) return [];
     if (object.type === "image") return [];
     if (object.type === "text" || object.type === "parameter") return [];
-    if (object.type === "measurement") return [...object.parents];
+    if (object.type === "measurement") {
+      return [...new Set([...object.parents, ...notationReferenceIds(object.notationRefs)])];
+    }
     if (object.type === "actionButton") return [...object.targetIds];
     if (object.type === "calculation") return [...new Set(Object.values(object.variables || {}))];
     if (object.type === "table") return [...object.sourceIds];
@@ -2981,6 +3448,7 @@ export class GeometryDocument {
       }
       if (object.definition.kind === "reflected") return [object.definition.parentId, object.definition.mirrorId];
       if (object.definition.kind === "inverted") return [object.definition.parentId, object.definition.circleId];
+      if (object.definition.kind === "shape-center") return [object.definition.parentId];
       if (object.definition.kind === "angle-ray") {
         return [object.definition.vertexId, object.definition.parentId];
       }

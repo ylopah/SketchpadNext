@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const indexHtml = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const appSource = readFileSync(new URL("../src/app.js", import.meta.url), "utf8");
 const helpSource = readFileSync(new URL("../src/core/help.js", import.meta.url), "utf8");
+const stylesSource = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 function occurrences(source, literal) {
   return source.split(literal).length - 1;
@@ -109,18 +110,36 @@ test("application keeps calculation editing and coordinate snapping contracts", 
   assert.ok(!appSource.includes("hasVisibleCoordinateGrid"));
   assert.ok(appSource.includes("存在多个可见坐标系，请同时选中要使用的坐标系"));
   assert.ok(appSource.includes("存在多个可见坐标系，请先选中要使用的坐标系"));
+  assert.ok(appSource.includes("selectionAnchor: { ...pointerWorld }"));
 });
 
-test("selection, multiline text and batch midpoint use the direct interaction paths", () => {
+test("selection, multiline text and preselected constructions use the direct interaction paths", () => {
   const pointerHandler = appSource.slice(
     appSource.indexOf("async function handleSinglePointerDown"),
     appSource.indexOf("function handleSinglePointerMove"),
+  );
+  const activateToolHandler = appSource.slice(
+    appSource.indexOf("function activateTool"),
+    appSource.indexOf("function clientToWorld"),
+  );
+  const endpointPairHandler = appSource.slice(
+    appSource.indexOf("function endpointPairsFromSelection"),
+    appSource.indexOf("function constructSegmentsFromSelection"),
+  );
+  const constructionDispatcher = appSource.slice(
+    appSource.indexOf("function attemptConstructionFromSelection"),
+    appSource.indexOf("function runConstructionCommand"),
   );
   const transformHandler = appSource.slice(
     appSource.indexOf("async function runTransformCommand"),
     appSource.indexOf("function createCoordinateSystem"),
   );
-  assert.ok(appSource.includes('if (tool === "midpoint" && constructMidpointsFromSelection()) return;'));
+  assert.ok(activateToolHandler.includes("selectedIds.size && attemptConstructionFromSelection(tool)"));
+  assert.ok(endpointPairHandler.includes('selection.length === 2 && selection.every((object) => object.type === "point")'));
+  assert.ok(endpointPairHandler.includes('selection.every((object) => object.type === "segment")'));
+  for (const command of ["segment", "line", "ray", "midpoint", "perpendicularBisector", "circle", "threePointCircle"]) {
+    assert.ok(constructionDispatcher.includes(`command === "${command}"`));
+  }
   assert.ok(appSource.includes("documentModel.hitTestPoint(pointerWorld, tolerance)"));
   assert.ok(pointerHandler.includes('consumeRecentCanvasClick("text", hit.object.id, event)'));
   assert.ok(!transformHandler.includes("consumeRecentCanvasClick"));
@@ -128,6 +147,46 @@ test("selection, multiline text and batch midpoint use the direct interaction pa
   assert.doesNotMatch(indexHtml, /id="batchRenameButton"/);
   assert.doesNotMatch(indexHtml, /id="inspectorToggleButton"/);
   assert.doesNotMatch(indexHtml, /快捷操作/);
+});
+
+test("right click controls the inspector without disabling right-button panning", () => {
+  const selectionHelpers = appSource.slice(
+    appSource.indexOf("function closeInspectorWhenSelectionIsEmpty"),
+    appSource.indexOf("function selectedObjects"),
+  );
+  assert.match(selectionHelpers, /if \(selectedIds\.size\) return/);
+  assert.match(selectionHelpers, /sketchpadnext:inspectorrequest/);
+  assert.equal((selectionHelpers.match(/closeInspectorWhenSelectionIsEmpty\(\)/g) || []).length, 4);
+  const pointerHandler = appSource.slice(
+    appSource.indexOf("async function handleSinglePointerDown"),
+    appSource.indexOf("function handleSinglePointerMove"),
+  );
+  assert.match(pointerHandler, /event\.button === 2/);
+  assert.match(pointerHandler, /const inspectorHitPosition = clientToWorld\(event, false\)/);
+  assert.ok(
+    pointerHandler.indexOf("documentModel.hitTestPoint(inspectorHitPosition")
+      < pointerHandler.indexOf("|| directObject"),
+  );
+  assert.match(pointerHandler, /selectedIds\.has\(hitObject\.id\)/);
+  assert.match(pointerHandler, /sketchpadnext:inspectorrequest/);
+  assert.match(pointerHandler, /detail: \{ open: true \}/);
+  assert.match(pointerHandler, /detail: \{ open: false \}/);
+  assert.match(pointerHandler, /event\.button === 1 \|\| event\.button === 2/);
+  assert.match(pointerHandler, /panState = \{/);
+});
+
+test("math overlines are rendered as one explicit SVG line above scripted text", () => {
+  const formatter = appSource.slice(
+    appSource.indexOf("function appendFormattedText"),
+    appSource.indexOf("function clearLayer"),
+  );
+  assert.match(formatter, /class: "math-overline-run"/);
+  assert.doesNotMatch(formatter, /text-decoration/);
+  assert.match(formatter, /querySelectorAll\("\.math-overline-run"\)/);
+  assert.match(formatter, /const bounds = run\.getBBox\(\)/);
+  assert.match(formatter, /class: "math-overline"/);
+  assert.match(formatter, /bounds\.y - Math\.max/);
+  assert.match(stylesSource, /\.math-overline \{[^}]*pointer-events: none/);
 });
 
 test("help states radian, degree and two-argument function semantics", () => {

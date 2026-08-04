@@ -124,6 +124,15 @@ test("page and styles expose the mobile layout contract", async () => {
   assert.match(shell, /function enhanceCommandMenus/);
   assert.match(shell, /select\.dispatchEvent\(new windowObject\.Event\("change"/);
   assert.match(shell, /setAttribute\("aria-expanded"/);
+  const triggerClickHandler = shell.slice(
+    shell.indexOf('trigger.addEventListener("click"'),
+    shell.indexOf('trigger.addEventListener("keydown"'),
+  );
+  assert.match(triggerClickHandler, /if \(!menu\.open\) openMenu\(menu\)/);
+  assert.doesNotMatch(triggerClickHandler, /closeMenu\(/);
+  assert.match(shell, /addEventListener\("sketchpadnext:inspectorrequest"/);
+  assert.match(shell, /setInspectorOpen\(Boolean\(event\.detail\?\.open\)/);
+  assert.match(shell, /右键已选对象可展开属性栏/);
   assert.doesNotMatch(shell, /const setInspectorPreview/);
   assert.match(shell, /root\.dataset\.inspector = shouldOpen/);
   assert.match(shell, /environment\.current\.device === "desktop"/);

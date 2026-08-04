@@ -90,19 +90,19 @@ async function restoreProjectHandle() {
 const toolDescriptions = {
   select: "单击交叉附近创建动态交点；拖动对象移动，空白处拖框多选",
   point: "点击空白处创建自由点；点击线或圆创建约束点",
-  segment: "依次选择两个点创建线段，也可直接在空白处点击",
-  line: "依次选择两个点创建无限直线",
-  ray: "先选射线端点，再选方向点",
-  midpoint: "可先多选线段后批量构造，也可点击一条线段或依次选择两个点",
-  perpendicularBisector: "选择一条线段，或依次选择/直接点出两个点创建中垂线",
+  segment: "可先选择至少两个点后直接构造，也可依次点出两个点创建线段",
+  line: "可先选择至少两个点后直接构造，也可依次点出两个点创建无限直线",
+  ray: "可先按顺序选择端点和方向点后直接构造，也可依次点出两点",
+  midpoint: "可先选择两个点或多选线段后直接构造，也可点击线段或依次选择两点",
+  perpendicularBisector: "可先选择两个点或多选线段后直接构造，也可依次选择/直接点出两点",
   parallel: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
   perpendicular: "可先多选点和基准线后批量构造，也可依次点击一个点和一条线",
   angleBisector: "可先选两条共顶点边，或依次选择/点出：第一边点、顶点、第二边点",
   marker: "在角的顶点按下并向角内拖动；点击已有灰色标识可切换 1～4 道弧线",
   info: "点击对象查看类型、父对象和子对象；按住 Shift 可让信息保持显示",
   text: "点击未命名点按字母空缺命名；点击空白处输入文本，双击文本可再次编辑",
-  circle: "先选圆心，再选圆上一点",
-  threePointCircle: "依次选择三个不共线的点创建外接圆",
+  circle: "可先选择圆心和圆上一点后直接构造，也可依次点出两点",
+  threePointCircle: "可先选择三个不共线的点后直接构造，也可依次选择三点",
 };
 
 const elements = Object.fromEntries([
@@ -327,19 +327,27 @@ function isSelected(id) {
   return selectedIds.has(id);
 }
 
+function closeInspectorWhenSelectionIsEmpty() {
+  if (selectedIds.size) return;
+  window.dispatchEvent(new CustomEvent("sketchpadnext:inspectorrequest", { detail: { open: false } }));
+}
+
 function clearSelection() {
   selectedIds = new Set();
   selectedId = null;
+  closeInspectorWhenSelectionIsEmpty();
 }
 
 function selectOnly(id) {
   selectedIds = id ? new Set([id]) : new Set();
   selectedId = id || null;
+  closeInspectorWhenSelectionIsEmpty();
 }
 
 function setSelection(ids, primaryId = null) {
   selectedIds = new Set(ids.filter((id) => documentModel.getObject(id)));
   selectedId = primaryId && selectedIds.has(primaryId) ? primaryId : [...selectedIds].at(-1) || null;
+  closeInspectorWhenSelectionIsEmpty();
 }
 
 function selectedObjects() {
@@ -434,7 +442,7 @@ function appendFormattedText(element, value, options = {}) {
   let index = 0;
   while (index < segments.length) {
     if (segments[index].decoration === "overline") {
-      const decorated = createSvgElement("tspan", { "text-decoration": "overline" });
+      const decorated = createSvgElement("tspan", { class: "math-overline-run" });
       while (index < segments.length && segments[index].decoration === "overline") {
         appendFormattedSegment(decorated, segments[index]);
         index += 1;
@@ -446,6 +454,35 @@ function appendFormattedText(element, value, options = {}) {
     index += 1;
   }
   if (!segments.length) element.textContent = " ";
+}
+
+function renderFormattedTextDecorations(textElement, layer) {
+  textElement.querySelectorAll(".math-overline-run").forEach((run) => {
+    try {
+      const bounds = run.getBBox();
+      if (![bounds.x, bounds.y, bounds.width].every(Number.isFinite) || bounds.width <= 0) return;
+      const computedStyle = globalThis.getComputedStyle?.(run);
+      const fontSize = Number.parseFloat(computedStyle?.fontSize)
+        || Number(textElement.getAttribute("font-size"))
+        || 16;
+      const stroke = computedStyle?.fill && computedStyle.fill !== "none"
+        ? computedStyle.fill
+        : textElement.getAttribute("fill") || "#273142";
+      const y = bounds.y - Math.max(1, fontSize * 0.08);
+      layer.append(createSvgElement("line", {
+        x1: bounds.x,
+        x2: bounds.x + bounds.width,
+        y1: y,
+        y2: y,
+        class: "math-overline",
+        stroke,
+        "stroke-width": Math.max(1, fontSize * 0.055),
+        "aria-hidden": "true",
+      }));
+    } catch {
+      // Text layout can be unavailable while an SVG subtree is detached.
+    }
+  });
 }
 
 function clearLayer(layer) {
@@ -855,6 +892,7 @@ function renderPoint(object, layer = elements.objectLayer) {
     });
     appendFormattedText(label, object.label, { legacyBracketSubscript: true });
     layer.append(label);
+    renderFormattedTextDecorations(label, layer);
   }
 }
 
@@ -908,6 +946,7 @@ function renderText(object, layer = elements.objectLayer) {
       // Model hit-testing remains available before the SVG text has layout bounds.
     }
   }
+  renderFormattedTextDecorations(text, layer);
 }
 
 function renderImage(object, layer = elements.objectLayer) {
@@ -1129,10 +1168,7 @@ function setTool(tool) {
 function activateTool(tool) {
   const restored = cancelIncompleteConstruction();
   if (restored) afterDocumentChange();
-  if (tool === "midpoint" && constructMidpointsFromSelection()) return;
-  if (["parallel", "perpendicular"].includes(tool) && constructDerivedLinesFromSelection(tool)) return;
-  if (tool === "perpendicularBisector" && constructPerpendicularBisectorsFromSelection()) return;
-  if (tool === "angleBisector" && constructAngleBisectorFromSelection()) return;
+  if (selectedIds.size && attemptConstructionFromSelection(tool)) return;
   setTool(tool);
 }
 
@@ -1425,6 +1461,20 @@ async function handleSinglePointerDown(event) {
   pointerWorld = clientToWorld(event, snapsConstructionPoint);
   pointerWorld = constrainConstructionPosition(pointerWorld, event);
   try { elements.geometryCanvas.focus({ preventScroll: true }); } catch {}
+  if (event.button === 2) {
+    const inspectorHitPosition = clientToWorld(event, false);
+    const directId = event.target?.closest?.("[data-object-id]")?.dataset.objectId;
+    const directObject = directId ? documentModel.getObject(directId) : null;
+    const hitObject = documentModel.hitTestPoint(inspectorHitPosition, selectionTolerance())?.object
+      || directObject
+      || documentModel.hitTest(inspectorHitPosition, selectionTolerance())?.object
+      || null;
+    if (hitObject && selectedIds.has(hitObject.id)) {
+      window.dispatchEvent(new CustomEvent("sketchpadnext:inspectorrequest", { detail: { open: true } }));
+    } else if (!hitObject || selectedIds.size === 0) {
+      window.dispatchEvent(new CustomEvent("sketchpadnext:inspectorrequest", { detail: { open: false } }));
+    }
+  }
   if (event.button === 1 || event.button === 2 || (event.button === 0 && spacePanActive)) {
     event.preventDefault();
     panState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, view: { ...view } };
@@ -2861,16 +2911,27 @@ function toggleSelectedPointLabels() {
   });
 }
 
+function endpointPairsFromSelection() {
+  const selection = selectedObjects();
+  if (selection.length === 2 && selection.every((object) => object.type === "point")) {
+    return [{ pointAId: selection[0].id, pointBId: selection[1].id }];
+  }
+  if (!selection.length || !selection.every((object) => object.type === "segment")) return [];
+  return selection.map((segment) => ({ pointAId: segment.pointAId, pointBId: segment.pointBId }));
+}
+
 function constructMidpointsFromSelection() {
-  const segments = selectedObjects().filter((object) => object.type === "segment");
-  if (!segments.length) return false;
+  const pairs = endpointPairsFromSelection();
+  if (!pairs.length) return false;
+  let created = [];
   mutate(() => {
-    const created = segments
-      .map((segment) => documentModel.addMidpoint(segment.pointAId, segment.pointBId, settings))
+    created = pairs
+      .map(({ pointAId, pointBId }) => documentModel.addMidpoint(pointAId, pointBId, settings))
       .filter(Boolean);
     setSelection(created.map((point) => point.id), created.at(-1)?.id || null);
   });
-  showToast(`已构造 ${segments.length} 条线段的中点`);
+  if (!created.length) return false;
+  showToast(created.length === 1 ? "已构造中点" : `已批量构造 ${created.length} 个中点`);
   return true;
 }
 
@@ -2930,14 +2991,17 @@ function constructLinearShapesFromSelection(type) {
 }
 
 function constructPerpendicularBisectorsFromSelection() {
-  const segments = selectedObjects().filter((object) => object.type === "segment");
-  if (!segments.length || segments.length !== selectedIds.size) return false;
+  const pairs = endpointPairsFromSelection();
+  if (!pairs.length) return false;
+  let created = [];
   mutate(() => {
-    const created = segments.map((segment) => documentModel.addPerpendicularBisector(
-      segment.pointAId, segment.pointBId, settings,
+    created = pairs.map(({ pointAId, pointBId }) => documentModel.addPerpendicularBisector(
+      pointAId, pointBId, settings,
     )).filter(Boolean);
     setSelection(created.map((shape) => shape.id), created.at(-1)?.id || null);
   });
+  if (!created.length) return false;
+  showToast(created.length === 1 ? "已构造中垂线" : `已批量构造 ${created.length} 条中垂线`);
   return true;
 }
 
@@ -3119,8 +3183,8 @@ function constructLocusFromSelection() {
   return Boolean(created);
 }
 
-function runConstructionCommand(command) {
-  const success = command === "segment" || command === "line" || command === "ray"
+function attemptConstructionFromSelection(command) {
+  return command === "segment" || command === "line" || command === "ray"
     ? constructLinearShapesFromSelection(command)
     : command === "midpoint" ? constructMidpointsFromSelection()
       : command === "intersection" ? constructIntersectionsFromSelection()
@@ -3136,11 +3200,15 @@ function runConstructionCommand(command) {
                       : ["circleInterior", "sectorInterior", "segmentInterior"].includes(command)
                         ? constructInteriorsFromSelection(command)
                         : command === "locus" ? constructLocusFromSelection() : false;
+}
+
+function runConstructionCommand(command) {
+  const success = attemptConstructionFromSelection(command);
   if (!success) {
     const requirement = {
       segment: "请选择至少两个点", line: "请选择至少两个点", ray: "请选择至少两个点",
-      midpoint: "请选择一条或多条线段", intersection: "请选择两个相交的线形或圆形对象",
-      perpendicularBisector: "请选择一条或多条线段", parallel: "请至少选择一个点和一条基准线，可同时多选",
+      midpoint: "请选择两个点，或一条/多条线段", intersection: "请选择两个相交的线形或圆形对象",
+      perpendicularBisector: "请选择两个点，或一条/多条线段", parallel: "请至少选择一个点和一条基准线，可同时多选",
       perpendicular: "请至少选择一个点和一条基准线，可同时多选", angleBisector: "请按顺序选择边上点、顶点、边上点",
       centroid: "请选择三个不共线的三角形顶点", incenter: "请选择三个不共线的三角形顶点",
       orthocenter: "请选择三个不共线的三角形顶点", incircle: "请选择三个不共线的三角形顶点",
@@ -3211,7 +3279,13 @@ function runMeasurementCommand(kind) {
   }
   let created = [];
   mutate(() => {
-    created = groups.map((parents, index) => documentModel.addMeasurement(kind, parents, measurementPosition(index), settings)).filter(Boolean);
+    const measurementSettings = { ...settings, selectionAnchor: { ...pointerWorld } };
+    created = groups.map((parents, index) => documentModel.addMeasurement(
+      kind,
+      parents,
+      measurementPosition(index),
+      measurementSettings,
+    )).filter(Boolean);
     setSelection(originalSelectionIds, originalPrimaryId);
   });
   showToast(created.length ? `已创建 ${created.length} 个动态度量值` : "无法创建该度量", created.length ? "info" : "warning");

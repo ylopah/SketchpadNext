@@ -636,6 +636,7 @@ html[data-device="desktop"][data-inspector="closed"] .calculation-panel { right:
 .geometry-point.marked-center { stroke: #e11d48; stroke-width: 4px; }
 .point-label { font-family: "Cambria Math", "Times New Roman", serif; font-size: 17px; font-style: italic; fill: #273142; pointer-events: auto; cursor: move; }
 .standalone-text { cursor: move; font-family: "Cambria Math", "STIX Two Math", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.math-overline { fill: none; stroke-linecap: round; pointer-events: none; }
 .text-hit-target { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
 .standalone-text.selected-visible { filter: drop-shadow(0 0 3px rgba(108,77,246,.65)); }
 .pending-visible { stroke: #ff9f1c !important; filter: drop-shadow(0 0 4px rgba(255,159,28,.65)); }
